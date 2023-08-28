@@ -96,7 +96,7 @@ def main(args):
     
     extlaws_arr = jnp.row_stack( (dustlaw.transmission for dustlaw in dust_arr) )
     
-    print(f"DEBUG: extinctions have shape {extlaws_arr.shape}, expected (nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, len(wl_grid)={len(wl_grid)})")
+    #print(f"DEBUG: extinctions have shape {extlaws_arr.shape}, expected (nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, len(wl_grid)={len(wl_grid)})")
     
     data_path = os.path.abspath(inputs['Dataset']['path'])
     data_ismag = (inputs['Dataset']['type'].lower() == 'm')
@@ -133,7 +133,8 @@ def main(args):
                                                    _obs_arr[0].AB_fluxes, _obs_arr[0].AB_f_errors, wl_grid)
         #print(f'{temp.name} - dusted mags={mags}')
     '''
-    
+    df_gal = pd.DataFrame()
+    dict_of_results_dict = {}
     for i,observ in enumerate(_obs_arr):
         #print(observ.AB_fluxes)
         '''
@@ -147,16 +148,44 @@ def main(args):
         chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
                                    z_grid, baseFluxes_arr, extlaws_arr,\
                                    filters_arr, cosmo, wl_grid)
-        print(f"Shape of chi^2 array = {chi2_arr.shape} for observation {observ.num}, {i+1}/{int(len(_obs_arr))}.\n Expected shape is a mix of nb(templates)={int(len(baseTemp_arr))}, nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, nb(redshift)={len(z_grid)}.")
+        #print(f"Shape of chi^2 array = {chi2_arr.shape} for observation {observ.num}, {i+1}/{int(len(_obs_arr))}.\n Expected shape is a mix of nb(templates)={int(len(baseTemp_arr))}, nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, nb(redshift)={len(z_grid)}.")
         
         
-        z_phot_loc = jnp.nanargmin(chi2_arr, axis=2, keepdims=False)
-        zp_likelihood = jnp.exp(-0.5*chi2_arr)/jnp.sum(jnp.exp(-0.5*chi2_arr))
+        z_phot_loc = jnp.nanargmin(chi2_arr) #, axis=2, keepdims=False)
+        mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc, (len(baseTemp_arr), len(inputs['e_BV'])*len(extlaws_dict), len(z_grid)))
+        #zp_likelihood = jnp.exp(-0.5*chi2_arr)/jnp.sum(jnp.exp(-0.5*chi2_arr))
         if not jnp.all(z_phot_loc==-1):
-            #print(z_phot_loc)
-            print(zp_likelihood[z_phot_loc])
-            #zphot, temp_id, law_id, ebv, chi2_val = z_grid[z_phot_loc[2]], baseTemp_arr[z_phot_loc[0]].num, z_phot_loc[1]//len(inputs['e_BV']), z_phot_loc[1]%len(inputs['e_BV']), chi2_arr[z_phot_loc]
+            
+            # Point estimate = min(chi^2)
+            mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc, (len(baseTemp_arr), len(inputs['e_BV'])*len(extlaws_dict), len(z_grid)))
+            zphot, temp_id, law_id, ebv, chi2_val = z_grid[zphot_num], baseTemp_arr[mod_num].name, dust_arr[ext_num].name, dust_arr[ext_num].EBV, chi2_arr[(mod_num, ext_num, zphot_num)]
             #print(f"For obs. {observ.num} with z_spec {observ.z_spec}, point estimates are :\n z_phot={zphot}, model num.={temp_id}, extinction law={law_id}, E(B-V)={ebv}, chi^2={chi2_val}")
+
+            for i,filt in enumerate(filters_arr):
+                df_gal.loc[observ.num, f"Mag({filt.name})"] = -2.5*jnp.log10(observ.AB_fluxes[i])-48.6
+                df_gal.loc[observ.num, f"MagErr({filt.name})"] = 1.086*observ.AB_f_errors[i]/observ.AB_fluxes[i]
+            
+            df_gal.loc[observ.num, "Photometric redshift"] = zphot
+            df_gal.loc[observ.num, "True redshift"] = observ.z_spec
+            df_gal.loc[observ.num, "Template SED"] = temp_id
+            df_gal.loc[observ.num, "Extinction law"] = law_id
+            df_gal.loc[observ.num, "E(B-V)"] = ebv
+            df_gal.loc[observ.num, "Chi2"] = chi2_val
+            
+
+        # distributions
+        z_phot_loc = jnp.nanargmin(chi2_arr, axis=2)
+        tempId_arr = [ temp.name for temp in baseTemp_arr ]
+        extLaw_arr = [ ext.name for ext in dust_arr ]
+        eBV_arr = [ ext.EBV for ext in dust_arr ]
+
+        res_dict = {'zp': z_grid, 'chi2': chi2_arr, 'mod id': tempId_arr, 'ext law': extLaw_arr, 'eBV': eBV_arr, 'min_locs': z_phot_loc}
+        dict_of_results_dict[observ.num] = res_dict
+            
+    if inputs["save results"]:
+        df_gal.to_pickle(f"{inputs['run name']}_results.pkl")
+        with open(f"{inputs['run name']}_results_dicts.pkl", 'wb') as handle:
+            pickle.dump(dict_of_results_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
     
     return 0
 
