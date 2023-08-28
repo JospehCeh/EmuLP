@@ -1,61 +1,128 @@
 #!/bin/env python3
 
 import numpy as np
+import jax.numpy as jnp
+from jax import vmap, jit
+from jax.debug import print as jprint
 from scipy.interpolate import interp1d
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+import sedpy
+import munch
+from typing import NamedTuple, Any
+import pathlib
 
-class Filter:
+# Place to store the filters for use with sedpy
+save_dir = os.path.abspath(os.path.join('.', 'EmuLP', 'data', 'filters'))
+pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+lightspeed = 2.998e18  # AA/s
+ab_gnu = 3.631e-20  # AB reference spctrum in erg/s/cm^2/Hz
+
+def some_hash_function(x):
+    return int(jnp.sum(x))
+
+class HashableArrayWrapper:
+    def __init__(self, val):
+        self.val = val
+    def __hash__(self):
+        return some_hash_function(self.val)
+    def __eq__(self, other):
+        return (isinstance(other, HashableArrayWrapper) and
+                jnp.all(jnp.equal(self.val, other.val)))
+
+class Filter(munch.Munch):
     """Class for filters implementation."""
-    def __init__(self, name, filterfile, trans_type):
-        self.name = name
-        self.path = os.path.abspath(filterfile)
-        self.wavelengths, self.transmit = np.loadtxt(self.path, unpack=True)
-        self.trans_type = trans_type
-        self.sort()
-        self.transform()
-        self.clip_filter()
-        self.f_transmit = interp1d(self.wavelengths, self.transmit, bounds_error=False, fill_value=0.)
-        #f,a = plt.subplots(1,1)
-        #a.plot(self.wavelengths, self.f_transmit(self.wavelengths))
-        #f.show()
+    def __init__(self, ident, filterfile, trans_type, filtdict=None):
+        if filtdict is None:
+            super().__init__()
+            self.id = ident
+            #self.path = os.path.abspath(filterfile)
+            _wls, _trans = np.loadtxt(os.path.abspath(filterfile), unpack=True)
+            self.trans_type = trans_type
+            wls, transm = sort(_wls, _trans)
+            self.mean_wl, new_trans = transform(wls, transm, self.trans_type)
+            self.wavelengths, self.transmit,\
+                                self.min_wl, self.max_wl,\
+                                self.minWL_peak, self.maxWL_peak, self.peak_wl = clip_filter(wls, new_trans)
+        else:
+            super().__init__(filtdict)
+        
+        f_transmit = lambda x : jnp.interp(x, self.wavelengths, self.transmit, left=0., right=0., period=None)
+        
+        save_dir = os.path.abspath(os.path.join('.', 'EmuLP', 'data', 'filters'))
+        import pathlib
+        pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
+        np.savetxt(os.path.join(save_dir, f'{self.id}.par'),\
+                   np.column_stack((self.wavelengths,\
+                                    f_transmit(self.wavelengths)\
+                                    )\
+                                   )\
+                  )
+        self.sedpy_filt = sedpy.observate.Filter(f'{self.id}', directory=save_dir)
         
     def __str__(self):
-        return f"{self.name} filter, from file : {self.path}."
+        return f"{self.id} filter" #, from file : {self.path}."
         
     def __repr__(self):
-        return f"<Filter object : name={self.name} ; path={self.path}>"
+        return f"<Filter object : name={self.id}" # ; path={self.path}>"
+    
+    def __eq__(self, other):
+        return (self.id == other.id) and (self.trans_type == other.trans_type) and (self.mean_wl == other.mean_wl) and (self.minWL_peak == other.minWL_peak) and (self.maxWL_peak == other.maxWL_peak) and (self.peak_wl == other.peak_wl)
+    
+    def __ne__(self, other):
+        return not self.__eq__(other)
+    
+    def __hash__(self):
+        return hash((self.id, self.trans_type, self.mean_wl, self.minWL_peak, self.maxWL_peak, self.peak_wl))
         
-    def sort(self):
-        _inds = np.argsort(self.wavelengths)
-        self.wavelengths = self.wavelengths[_inds]
-        self.transmit = self.transmit[_inds]
-        del _inds
-        
-    def lambda_mean(self):
-        self.mean_wl = np.trapz(self.wavelengths*self.transmit, self.wavelengths) / np.trapz(self.transmit, self.wavelengths)
-        
-    def clip_filter(self):
-        _indToKeep = np.where(self.transmit >= 0.01*np.max(self.transmit))[0]
-        self.wavelengths = self.wavelengths[ _indToKeep ]
-        self.transmit = self.transmit[ _indToKeep ]
-        _lambdas_peak = self.wavelengths[ np.where(self.transmit >= 0.5*np.max(self.transmit))[0] ]
-        self.min_wl, self.max_wl = np.min(self.wavelengths), np.max(self.wavelengths)
-        self.minWL_peak, self.maxWL_peak = np.min(_lambdas_peak), np.max(_lambdas_peak)
-        self.peak_wl = self.wavelengths[ np.argmax(self.transmit) ]
-        
-    def transform(self):
-        self.lambda_mean()
-        if (self.trans_type.lower() == "photons") and (self.mean_wl>0.):
-            for k, _wl in enumerate(self.wavelengths):
-                self.transmit[k] = self.transmit[k]*(_wl/self.mean_wl)
+def sort(wl, trans):
+    _inds = jnp.argsort(wl)
+    wls = wl[_inds]
+    transm = trans[_inds]
+    return wls, transm
 
+def lambda_mean(wls, trans):
+    mean_wl = jnp.trapz(wls*trans, wls) / jnp.trapz(trans, wls)
+    return mean_wl
+        
+def clip_filter(wls, trans):
+    _indToKeep = np.where(trans >= 0.01*np.max(trans))[0]
+    new_wls = wls[ _indToKeep ]
+    new_trans = trans[ _indToKeep ]
+    _lambdas_peak = new_wls[ np.where(new_trans >= 0.5*np.max(new_trans))[0] ]
+    min_wl, max_wl = np.min(new_wls), np.max(new_wls)
+    minWL_peak, maxWL_peak = np.min(_lambdas_peak), np.max(_lambdas_peak)
+    peak_wl = new_wls[ np.argmax(new_trans) ]
+    return new_wls, new_trans, min_wl, max_wl, minWL_peak, maxWL_peak, peak_wl
+        
+def transform(wls, trans, trans_type):
+    mean_wl = lambda_mean(wls, trans)
+    if (trans_type.lower() == "photons") and (mean_wl>0.):
+        new_trans = jnp.array( trans*wls/mean_wl )
+    else:
+        new_trans = trans
+    return mean_wl, new_trans
+
+def load_filt(ident, filterfile, trans_type):
+    __wls, __trans = np.loadtxt(os.path.abspath(filterfile), unpack=True)
+    _wls, _trans = jnp.array(__wls), jnp.array(__trans)
+    wls, transm = sort(_wls, _trans)
+    mean_wl, new_trans = transform(wls, transm, trans_type)
+    max_trans = jnp.max(new_trans)
+    _sel = (new_trans >= 0.01*max_trans)
+    newwls = jnp.array(wls[_sel])
+    newtrans = jnp.array(new_trans[_sel])
+    return ident, wls[_sel], new_trans[_sel]
+    #np.savetxt(os.path.join(save_dir, f'{ident}.par'), np.column_stack( (wls[_sel], new_trans[_sel]) ) )
+    #return ident, sedpy.observate.Filter(f'{ident}', directory=save_dir)
 
 def to_df(filters_arr, wls=np.arange(1000., 10000., 10.), save=False, name=None):
     df_filt = pd.DataFrame(index=wls)
     for filt in filters_arr:
-        df_filt[filt.name] = filt.f_transmit(wls)
+        f_transmit = lambda x : jnp.interp(x, filt.wavelengths, filt.transmit, left=0., right=0., period=None) 
+        df_filt[filt.id] = f_transmit(wls)
     if save:
         try:
             assert name is not None, "Please specify a name for filters dataframe file."
@@ -65,12 +132,234 @@ def to_df(filters_arr, wls=np.arange(1000., 10000., 10.), save=False, name=None)
             pass
     return df_filt
 
+def return_updated_filter(filt, **kwargs):
+    as_dict = filt.toDict()
+    as_dict.update(kwargs)
+    new_filt = Filter(None, None, None, filtdict=as_dict)
+    return new_filt
+
+#################################################
+# THE FOLLOWING IS ADAPTED FROM sedpy.observate #
+#################################################
+
+#try:
+#    from pkg_resources import resource_filename, resource_listdir
+#except(ImportError):
+#    pass
+#from sedpy.reference_spectra import vega, solar, sedpydir
 
 
+#__all__ = ["Filter", "FilterSet", "load_filters", "list_available_filters", "getSED", "air2vac", "vac2air", "Lbol"]
 
 
+def noJit_get_properties(filtwave, filttransm):
+    """Determine and store a number of properties of the filter and store
+    them in the object.  These properties include several 'effective'
+    wavelength definitions and several width definitions, as well as the
+    in-band absolute AB solar magnitude, the Vega and AB reference
+    zero-point detector signal, and the conversion between AB and Vega
+    magnitudes.
+
+    See Fukugita et al. (1996) AJ 111, 1748 for discussion and definition
+    of many of these quantities.
+    """
+    # Calculate some useful integrals
+    i0 = jnp.trapz(filttransm * jnp.log(filtwave), x=jnp.log(filtwave))
+    i1 = jnp.trapz(filttransm, x=jnp.log(filtwave))
+    i2 = jnp.trapz(filttransm * filtwave, x=filtwave)
+    i3 = jnp.trapz(filttransm, x=filtwave)
+
+    wave_effective = jnp.exp(i0 / i1)
+    wave_pivot = jnp.sqrt(i2 / i1)
+    wave_mean = wave_effective
+    wave_average = i2 / i3
+    rectangular_width = i3 / jnp.max(filttransm)
+
+    i4 = jnp.trapz(filttransm * jnp.power((jnp.log(filtwave / wave_effective)), 2.0), x=jnp.log(filtwave))
+    gauss_width = jnp.power((i4 / i1), 0.5)
+    effective_width = (2.0 * jnp.sqrt(2. * jnp.log(2.)) * gauss_width * wave_effective)
+
+    # Get zero points and AB to Vega conversion
+    ab_zero_counts = obj_counts_hires(filtwave, filttransm, filtwave, ab_gnu * lightspeed / filtwave**2)
+    return ab_zero_counts
+
+@jit
+def get_properties(filtwave, filttransm):
+    """Determine and store a number of properties of the filter and store
+    them in the object.  These properties include several 'effective'
+    wavelength definitions and several width definitions, as well as the
+    in-band absolute AB solar magnitude, the Vega and AB reference
+    zero-point detector signal, and the conversion between AB and Vega
+    magnitudes.
+
+    See Fukugita et al. (1996) AJ 111, 1748 for discussion and definition
+    of many of these quantities.
+    """
+    # Calculate some useful integrals
+    i0 = jnp.trapz(filttransm * jnp.log(filtwave), x=jnp.log(filtwave))
+    i1 = jnp.trapz(filttransm, x=jnp.log(filtwave))
+    i2 = jnp.trapz(filttransm * filtwave, x=filtwave)
+    i3 = jnp.trapz(filttransm, x=filtwave)
+
+    wave_effective = jnp.exp(i0 / i1)
+    wave_pivot = jnp.sqrt(i2 / i1)
+    wave_mean = wave_effective
+    wave_average = i2 / i3
+    rectangular_width = i3 / jnp.max(filttransm)
+
+    i4 = jnp.trapz(filttransm * jnp.power((jnp.log(filtwave / wave_effective)), 2.0), x=jnp.log(filtwave))
+    gauss_width = jnp.power((i4 / i1), 0.5)
+    effective_width = (2.0 * jnp.sqrt(2. * jnp.log(2.)) * gauss_width * wave_effective)
+
+    # Get zero points and AB to Vega conversion
+    ab_zero_counts = obj_counts_hires(filtwave, filttransm, filtwave, ab_gnu * lightspeed / filtwave**2)
+    return ab_zero_counts
+
+    '''
+    # If blue enough get AB mag of vega
+    if wave_mean < 1e6:
+        vega_zero_counts = obj_counts_hires(filtwave, filttransm, vega[:, 0], vega[:, 1])
+        _ab_to_vega = -2.5 * jnp.log10(ab_zero_counts / vega_zero_counts)
+    else:
+        vega_zero_counts = float('NaN')
+        _ab_to_vega = float('NaN')
+    # If blue enough get absolute solar magnitude
+    if wave_mean < 1e5:
+        solar_ab_mag = ab_mag(filtwave, filt_trans, solar[:,0], solar[:,1])
+    else:
+        solar_ab_mag = float('NaN')
+    '''
+            
+    '''
+    @property
+    def ab_to_vega(self):
+        """The conversion from AB to Vega systems for this filter.  It has the
+        sense
+
+        :math:`m_{Vega} = m_{AB} + Filter().ab_to_vega`
+        """
+        return self._ab_to_vega
+    '''
+    
+
+def noJit_obj_counts_hires(filtwave, filt_trans, sourcewave, sourceflux):
+    """Project source spectrum onto filter and return the detector signal.
+
+    Parameters
+    ----------
+    sourcewave : ndarray of shape ``(N_pix,)``
+        Spectrum wavelength (in Angstroms). Must be monotonic increasing.
+
+    sourceflux : ndarray of shape ``(N_source, N_pix)``
+        Associated flux (assumed to be in erg/s/cm^2/AA)
+
+    Returns
+    -------
+    counts : ndarray of shape ``(N_source,)``
+        Detector signal(s).
+    """
+    # Interpolate filter transmission to source spectrum
+    newtrans = jnp.interp(sourcewave, filtwave, filt_trans, left=0., right=0., period=None)
+
+    # Integrate lambda*f_lambda*R
+    counts = jnp.trapz(sourcewave * newtrans * sourceflux, x=sourcewave)
+    return counts
+    
+@jit
+def obj_counts_hires(filtwave, filt_trans, sourcewave, sourceflux):
+    """Project source spectrum onto filter and return the detector signal.
+
+    Parameters
+    ----------
+    sourcewave : ndarray of shape ``(N_pix,)``
+        Spectrum wavelength (in Angstroms). Must be monotonic increasing.
+
+    sourceflux : ndarray of shape ``(N_source, N_pix)``
+        Associated flux (assumed to be in erg/s/cm^2/AA)
+
+    Returns
+    -------
+    counts : ndarray of shape ``(N_source,)``
+        Detector signal(s).
+    """
+    # Interpolate filter transmission to source spectrum
+    newtrans = jnp.interp(sourcewave, filtwave, filt_trans, left=0., right=0., period=None)
+
+    # Integrate lambda*f_lambda*R
+    counts = jnp.trapz(sourcewave * newtrans * sourceflux, x=sourcewave)
+    return counts
 
 
+def noJit_ab_mag(filtwave, filt_trans, sourcewave, sourceflux):
+    """Project source spectrum onto filter and return the AB magnitude.
+
+    Parameters
+    ----------
+    sourcewave : ndarray of shape ``(N_pix,)``
+        Spectrum wavelength (in Angstroms). Must be monotonic increasing.
+
+    sourceflux : ndarray of shape ``(N_source, N_pix)``
+        Associated flux (assumed to be in erg/s/cm^2/AA)
+
+    Returns
+    -------
+    mag : float or ndarray of shape ``(N_source,)``
+        AB magnitude of the source(s).
+    """
+    ab_zero_counts =  noJit_get_properties(filtwave, filt_trans)
+    print(f'AB-counts={ab_zero_counts}')
+    counts = noJit_obj_counts_hires(filtwave, filt_trans, sourcewave, sourceflux)
+    print(f'filter counts={counts}')
+    return -2.5 * jnp.log10(counts / ab_zero_counts)
+
+@jit
+def ab_mag(filtwave, filt_trans, sourcewave, sourceflux):
+    """Project source spectrum onto filter and return the AB magnitude.
+
+    Parameters
+    ----------
+    sourcewave : ndarray of shape ``(N_pix,)``
+        Spectrum wavelength (in Angstroms). Must be monotonic increasing.
+
+    sourceflux : ndarray of shape ``(N_source, N_pix)``
+        Associated flux (assumed to be in erg/s/cm^2/AA)
+
+    Returns
+    -------
+    mag : float or ndarray of shape ``(N_source,)``
+        AB magnitude of the source(s).
+    """
+    ab_zero_counts =  get_properties(filtwave, filt_trans)
+    counts = obj_counts_hires(filtwave, filt_trans, sourcewave, sourceflux)
+    return -2.5 * jnp.log10(counts / ab_zero_counts)
+
+'''
+@jit                                   
+def vega_mag(filtwave, filt_trans, sourcewave, sourceflux):
+    """Project source spectrum onto filter and return the Vega magnitude.
+
+    Parameters
+    ----------
+    sourcewave : ndarray of shape ``(N_pix,)``
+        Spectrum wavelength (in Angstroms). Must be monotonic increasing.
+
+    sourceflux : ndarray of shape ``(N_source, N_pix)``
+        Associated flux (assumed to be in erg/s/cm^2/AA)
+
+    Returns
+    -------
+    mag : float or ndarray of shape ``(N_source,)``
+        Vega magnitude of the source(s).
+    """
+    counts = obj_counts_hires(filtwave, filt_trans, sourcewave, sourceflux)
+    return -2.5 * jnp.log10(counts / self.vega_zero_counts)
+'''
+
+##########################################
+# Fin de l'adaptation de sedpy.observate #
+##########################################
+
+'''
 ## Functions inherited from notebooks created for FORS2 analysis ##
 ## Temporarily saved here for use if necessary for tests or whatever ##
 
@@ -177,3 +466,4 @@ def color_index(wavelengths, spectrum, band_1, band_2):
     _mag2 = mag_in_band(wavelengths, spectrum, band_2)
     color = _mag1 - _mag2
     return color
+'''
