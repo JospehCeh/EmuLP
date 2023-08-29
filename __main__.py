@@ -33,6 +33,7 @@ import json
 import os,sys,copy
 import matplotlib.pyplot as plt
 import pickle
+from tqdm import tqdm
 
 from collections import namedtuple
 
@@ -135,7 +136,7 @@ def main(args):
     '''
     df_gal = pd.DataFrame()
     dict_of_results_dict = {}
-    for i,observ in enumerate(_obs_arr):
+    for i,observ in enumerate(tqdm(_obs_arr)):
         #print(observ.AB_fluxes)
         '''
         for temp_ident in templates_dict:
@@ -182,11 +183,13 @@ def main(args):
         res_dict = {'zp': z_grid, 'chi2': chi2_arr, 'mod id': tempId_arr, 'ext law': extLaw_arr, 'eBV': eBV_arr, 'min_locs': z_phot_loc}
         dict_of_results_dict[observ.num] = res_dict
         
+        '''
         _progress = ((i+1)*100) // len(_obs_arr)
         if _progress%2 == 1:
             #sys.stdout[-1] = (f"Estimation: {_progress}% done out of {data_file_arr.shape[0]} galaxies in dataset.")
             print(f"Data generation: {_progress}% done out of {len(_obs_arr)} galaxies in dataset.", flush=True)
-            
+        '''
+        
     if inputs["save results"]:
         df_gal.to_pickle(f"{inputs['run name']}_results.pkl")
         with open(f"{inputs['run name']}_results_dicts.pkl", 'wb') as handle:
