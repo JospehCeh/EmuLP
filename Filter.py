@@ -8,7 +8,7 @@ from scipy.interpolate import interp1d
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-import sedpy
+#import sedpy
 import munch
 from typing import NamedTuple, Any
 import pathlib

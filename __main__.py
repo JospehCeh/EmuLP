@@ -161,9 +161,9 @@ def main(args):
             zphot, temp_id, law_id, ebv, chi2_val = z_grid[zphot_num], baseTemp_arr[mod_num].name, dust_arr[ext_num].name, dust_arr[ext_num].EBV, chi2_arr[(mod_num, ext_num, zphot_num)]
             #print(f"For obs. {observ.num} with z_spec {observ.z_spec}, point estimates are :\n z_phot={zphot}, model num.={temp_id}, extinction law={law_id}, E(B-V)={ebv}, chi^2={chi2_val}")
 
-            for i,filt in enumerate(filters_arr):
-                df_gal.loc[observ.num, f"Mag({filt.name})"] = -2.5*jnp.log10(observ.AB_fluxes[i])-48.6
-                df_gal.loc[observ.num, f"MagErr({filt.name})"] = 1.086*observ.AB_f_errors[i]/observ.AB_fluxes[i]
+            for j,filt in enumerate(filters_arr):
+                df_gal.loc[observ.num, f"Mag({filt.name})"] = -2.5*jnp.log10(observ.AB_fluxes[j])-48.6
+                df_gal.loc[observ.num, f"MagErr({filt.name})"] = 1.086*observ.AB_f_errors[j]/observ.AB_fluxes[j]
             
             df_gal.loc[observ.num, "Photometric redshift"] = zphot
             df_gal.loc[observ.num, "True redshift"] = observ.z_spec
@@ -181,6 +181,11 @@ def main(args):
 
         res_dict = {'zp': z_grid, 'chi2': chi2_arr, 'mod id': tempId_arr, 'ext law': extLaw_arr, 'eBV': eBV_arr, 'min_locs': z_phot_loc}
         dict_of_results_dict[observ.num] = res_dict
+        
+        _progress = ((i+1)*100) // len(_obs_arr)
+        if _progress%2 == 1:
+            #sys.stdout[-1] = (f"Estimation: {_progress}% done out of {data_file_arr.shape[0]} galaxies in dataset.")
+            print(f"Data generation: {_progress}% done out of {len(_obs_arr)} galaxies in dataset.", flush=True)
             
     if inputs["save results"]:
         df_gal.to_pickle(f"{inputs['run name']}_results.pkl")
