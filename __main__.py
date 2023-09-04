@@ -35,8 +35,6 @@ import matplotlib.pyplot as plt
 import pickle
 from tqdm import tqdm
 
-from collections import namedtuple
-
 def main(args):
     if len(args) > 1:
         conf_json = args[1] # le premier argument de args est toujours `__main__.py`
@@ -46,9 +44,8 @@ def main(args):
         inputs = json.load(inpfile)
     
     #cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
-    Cosmo = namedtuple('Cosmo', ['h0', 'om0', 'l0', 'omt'])
-    cosmo = Cosmo(inputs['Cosmology']['h0'], inputs['Cosmology']['om0'], inputs['Cosmology']['l0'],\
-                  inputs['Cosmology']['om0']+inputs['Cosmology']['l0'])
+    cosmo = Cosmology.Cosmo(inputs['Cosmology']['h0'], inputs['Cosmology']['om0'], inputs['Cosmology']['l0'],\
+                            inputs['Cosmology']['om0']+inputs['Cosmology']['l0'])
     
     z_grid = jnp.arange(inputs['Z_GRID']['z_min'],\
                         inputs['Z_GRID']['z_max']+inputs['Z_GRID']['z_step'],\
@@ -58,137 +55,139 @@ def main(args):
                          inputs['WL_GRID']['lambda_step'])
     
     filters_dict = inputs['Filters']
-          
-    sedpyFilter = namedtuple('sedpyFilter', ['name', 'wavelengths', 'transmission'])
-    filters_arr = tuple( sedpyFilter(*Filter.load_filt(int(ident),\
-                                                       filters_dict[ident]["path"],\
-                                                       filters_dict[ident]["transmission"]\
-                                                      )\
-                                    )
-                        for ident in filters_dict )
+    print("Loading filters :")
+    filters_arr = tuple( Filter.sedpyFilter(*Filter.load_filt(int(ident),\
+                                                              filters_dict[ident]["path"],\
+                                                              filters_dict[ident]["transmission"]\
+                                                             )\
+                                           )
+                        for ident in tqdm(filters_dict) )
     N_FILT = len(filters_arr)
     #print(f"DEBUG: filters = {filters_arr}")
     
+    print("Building templates :")
     templates_dict = inputs['Templates']
-          
-    BaseTemplate = namedtuple('BaseTemplate', ['name', 'flux'])
-    baseTemp_arr = tuple( BaseTemplate(*Template.make_base_template(templates_dict[ident]["name"],\
-                                                                    templates_dict[ident]["path"],\
-                                                                    wl_grid
-                                                                   )\
-                                      )
-                         for ident in templates_dict )
-    
+    baseTemp_arr = tuple( Template.BaseTemplate(*Template.make_base_template(templates_dict[ident]["name"],\
+                                                                             templates_dict[ident]["path"],\
+                                                                             wl_grid
+                                                                            )\
+                                               )
+                         for ident in tqdm(templates_dict) )
     baseFluxes_arr = jnp.row_stack((bt.flux for bt in baseTemp_arr))
     
+    print("Computing dust extinctions :")
     extlaws_dict = inputs['Extinctions']
-    DustLaw = namedtuple('DustLaw', ['name', 'EBV', 'transmission'])
     dust_arr = []
-    for ident in extlaws_dict:
-        dust_arr.extend([ DustLaw(extlaws_dict[ident]['name'],\
-                                     ebv,\
-                                     Extinction.load_extinc(f'{ident}_{ebv}',\
-                                                            extlaws_dict[ident]['path'],\
-                                                            ebv,\
-                                                            wl_grid)\
-                                    )\
-                            for ebv in inputs['e_BV']\
+    for ident in tqdm(extlaws_dict):
+        dust_arr.extend([ Extinction.DustLaw(extlaws_dict[ident]['name'],\
+                                             ebv,\
+                                             Extinction.load_extinc(f'{ident}_{ebv}',\
+                                                                    extlaws_dict[ident]['path'],\
+                                                                    ebv,\
+                                                                    wl_grid)\
+                                            )\
+                            for ebv in tqdm(inputs['e_BV'])\
                            ])
-    
     extlaws_arr = jnp.row_stack( (dustlaw.transmission for dustlaw in dust_arr) )
     
     #print(f"DEBUG: extinctions have shape {extlaws_arr.shape}, expected (nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, len(wl_grid)={len(wl_grid)})")
     
+    
+    print('Loading observations :')
     data_path = os.path.abspath(inputs['Dataset']['path'])
     data_ismag = (inputs['Dataset']['type'].lower() == 'm')
     
     data_file_arr = loadtxt(data_path)
     _obs_arr = []
-          
-    Observation = namedtuple('Observation', ['num', 'AB_fluxes', 'AB_f_errors', 'z_spec'])
     
-    for i in range(data_file_arr.shape[0]):
+    for i in tqdm(range(data_file_arr.shape[0])):
         try:
             assert (len(data_file_arr[i,:]) == 1+2*N_FILT) or (len(data_file_arr[i,:]) == 1+2*N_FILT+1), f"At least one filter is missing in datapoint {data_file_arr[i,0]} : length is {len(data_file_arr[i,:])}, {1+2*N_FILT} values expected.\nDatapoint removed from dataset."
             #print(int(data_file_arr[i, 0]))
             if (len(data_file_arr[i,:]) == 1+2*N_FILT+1):
-                observ = Observation(int(data_file_arr[i, 0]),\
-                                     *Galaxy.load_galaxy(data_file_arr[i, 1:2*N_FILT+1],\
-                                                         data_ismag),\
-                                     data_file_arr[i, 2*N_FILT+1]\
-                                    )
+                observ = Galaxy.Observation(int(data_file_arr[i, 0]),\
+                                            *Galaxy.load_galaxy(data_file_arr[i, 1:2*N_FILT+1],\
+                                                                data_ismag),\
+                                            data_file_arr[i, 2*N_FILT+1]\
+                                           )
             else:
-                observ = Observation(int(data_file_arr[i, 0]),\
-                                     *Galaxy.load_galaxy(data_file_arr[i, 1:2*N_FILT+1],\
-                                                         data_ismag),\
-                                     None\
-                                    )
+                observ = Galaxy.Observation(int(data_file_arr[i, 0]),\
+                                            *Galaxy.load_galaxy(data_file_arr[i, 1:2*N_FILT+1],\
+                                                                data_ismag),\
+                                            None\
+                                           )
             #print(observ.num)
             _obs_arr.extend([observ])
         except AssertionError:
             pass
-        
-    '''
-    for temp in baseTemp_arr:
-        mags = Template.nojit_make_scaled_template(temp.flux, filters_arr, dust_arr[3].transmission, 1.1, cosmo,\
-                                                   _obs_arr[0].AB_fluxes, _obs_arr[0].AB_f_errors, wl_grid)
-        #print(f'{temp.name} - dusted mags={mags}')
-    '''
+    
+    print('Photometric redshift estimation :')
     df_gal = pd.DataFrame()
     dict_of_results_dict = {}
-    for i,observ in enumerate(tqdm(_obs_arr)):
-        #print(observ.AB_fluxes)
-        '''
-        for temp_ident in templates_dict:
-            chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
-                                       z_grid, templates_dict[temp_ident]['path'], extlaws_arr,\
-                                       filters_arr, cosmo, wl_grid)
-            print(f"Shape of chi^2 array = {chi2_arr.shape} for observation {observ.num}, {i+1}/{int(len(_obs_arr))}.\n Expected shape is a mix of nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, nb(redshift)={len(z_grid)}.")
-        '''
-        
+    
+    @jit
+    def estim_zp(observ):
         chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
                                    z_grid, baseFluxes_arr, extlaws_arr,\
                                    filters_arr, cosmo, wl_grid)
+        
+        z_phot_loc = jnp.nanargmin(chi2_arr)
+        return chi2_arr, z_phot_loc
+        
+    for i,observ in enumerate(tqdm(_obs_arr)):
+        #print(observ.AB_fluxes)
+        chi2_arr, z_phot_loc = estim_zp(observ)
+        mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc,\
+                                                        (len(baseTemp_arr),\
+                                                         len(inputs['e_BV'])*len(extlaws_dict),\
+                                                         len(z_grid)\
+                                                        )\
+                                                       )
+        zphot, temp_id, law_id, ebv, chi2_val = z_grid[zphot_num],\
+                                                baseTemp_arr[mod_num].name,\
+                                                dust_arr[ext_num].name,\
+                                                dust_arr[ext_num].EBV,\
+                                                chi2_arr[(mod_num, ext_num, zphot_num)]
+        #chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
+        #                           z_grid, baseFluxes_arr, extlaws_arr,\
+        #                           filters_arr, cosmo, wl_grid)
         #print(f"Shape of chi^2 array = {chi2_arr.shape} for observation {observ.num}, {i+1}/{int(len(_obs_arr))}.\n Expected shape is a mix of nb(templates)={int(len(baseTemp_arr))}, nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, nb(redshift)={len(z_grid)}.")
         
         
-        z_phot_loc = jnp.nanargmin(chi2_arr) #, axis=2, keepdims=False)
-        mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc, (len(baseTemp_arr), len(inputs['e_BV'])*len(extlaws_dict), len(z_grid)))
+        #z_phot_loc = jnp.nanargmin(chi2_arr) #, axis=2, keepdims=False)
         #zp_likelihood = jnp.exp(-0.5*chi2_arr)/jnp.sum(jnp.exp(-0.5*chi2_arr))
-        if not jnp.all(z_phot_loc==-1):
-            
+        #if not jnp.all(z_phot_loc==-1):
             # Point estimate = min(chi^2)
-            mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc, (len(baseTemp_arr), len(inputs['e_BV'])*len(extlaws_dict), len(z_grid)))
-            zphot, temp_id, law_id, ebv, chi2_val = z_grid[zphot_num], baseTemp_arr[mod_num].name, dust_arr[ext_num].name, dust_arr[ext_num].EBV, chi2_arr[(mod_num, ext_num, zphot_num)]
-            #print(f"For obs. {observ.num} with z_spec {observ.z_spec}, point estimates are :\n z_phot={zphot}, model num.={temp_id}, extinction law={law_id}, E(B-V)={ebv}, chi^2={chi2_val}")
+        #    mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc,\
+        #                                                    (len(baseTemp_arr),\
+        #                                                     len(inputs['e_BV'])*len(extlaws_dict),\
+        #                                                     len(z_grid)\
+        #                                                    )\
+        #                                                   )
+        #    zphot, temp_id, law_id, ebv, chi2_val = z_grid[zphot_num],\
+        #                                            baseTemp_arr[mod_num].name,\
+        #                                            dust_arr[ext_num].name,\
+        #                                            dust_arr[ext_num].EBV,\
+        #                                            chi2_arr[(mod_num, ext_num, zphot_num)]
+        #print(f"For obs. {observ.num} with z_spec {observ.z_spec}, point estimates are :\n z_phot={zphot}, model num.={temp_id}, extinction law={law_id}, E(B-V)={ebv}, chi^2={chi2_val}")
 
-            for j,filt in enumerate(filters_arr):
-                df_gal.loc[observ.num, f"Mag({filt.name})"] = -2.5*jnp.log10(observ.AB_fluxes[j])-48.6
-                df_gal.loc[observ.num, f"MagErr({filt.name})"] = 1.086*observ.AB_f_errors[j]/observ.AB_fluxes[j]
-            
-            df_gal.loc[observ.num, "Photometric redshift"] = zphot
-            df_gal.loc[observ.num, "True redshift"] = observ.z_spec
-            df_gal.loc[observ.num, "Template SED"] = temp_id
-            df_gal.loc[observ.num, "Extinction law"] = law_id
-            df_gal.loc[observ.num, "E(B-V)"] = ebv
-            df_gal.loc[observ.num, "Chi2"] = chi2_val
-            
+        #for j,filt in enumerate(filters_arr):
+        #    df_gal.loc[observ.num, f"Mag({filt.name})"] = -2.5*jnp.log10(observ.AB_fluxes[j])-48.6
+        #    df_gal.loc[observ.num, f"MagErr({filt.name})"] = 1.086*observ.AB_f_errors[j]/observ.AB_fluxes[j]
+        df_gal.loc[observ.num, "Photometric redshift"] = zphot
+        df_gal.loc[observ.num, "True redshift"] = observ.z_spec
+        df_gal.loc[observ.num, "Template SED"] = temp_id
+        df_gal.loc[observ.num, "Extinction law"] = law_id
+        df_gal.loc[observ.num, "E(B-V)"] = ebv
+        df_gal.loc[observ.num, "Chi2"] = chi2_val
 
         # distributions
-        z_phot_loc = jnp.nanargmin(chi2_arr, axis=2)
-        tempId_arr = [ temp.name for temp in baseTemp_arr ]
-        extLaw_arr = [ ext.name for ext in dust_arr ]
-        eBV_arr = [ ext.EBV for ext in dust_arr ]
-
-        res_dict = {'zp': z_grid, 'chi2': chi2_arr, 'mod id': tempId_arr, 'ext law': extLaw_arr, 'eBV': eBV_arr, 'min_locs': z_phot_loc}
-        dict_of_results_dict[observ.num] = res_dict
-        
-        '''
-        _progress = ((i+1)*100) // len(_obs_arr)
-        if _progress%2 == 1:
-            #sys.stdout[-1] = (f"Estimation: {_progress}% done out of {data_file_arr.shape[0]} galaxies in dataset.")
-            print(f"Data generation: {_progress}% done out of {len(_obs_arr)} galaxies in dataset.", flush=True)
-        '''
+        #z_phot_loc = jnp.nanargmin(chi2_arr, axis=2)
+        #tempId_arr = [ temp.name for temp in baseTemp_arr ]
+        #extLaw_arr = [ ext.name for ext in dust_arr ]
+        #eBV_arr = [ ext.EBV for ext in dust_arr ]
+        #res_dict = {'zp': z_grid, 'chi2': chi2_arr, 'mod id': tempId_arr, 'ext law': extLaw_arr, 'eBV': eBV_arr, 'min_locs': z_phot_loc}
+        dict_of_results_dict[observ.num] = chi2_arr
         
     if inputs["save results"]:
         df_gal.to_pickle(f"{inputs['run name']}_results.pkl")

@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import munch
 from typing import NamedTuple, Any
 import pathlib
+from collections import namedtuple
 
 # Place to store the filters for use with sedpy
 save_dir = os.path.abspath(os.path.join('.', 'EmuLP', 'data', 'filters'))
@@ -19,6 +20,20 @@ pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
 
 lightspeed = 2.998e18  # AA/s
 ab_gnu = 3.631e-20  # AB reference spctrum in erg/s/cm^2/Hz
+
+sedpyFilter = namedtuple('sedpyFilter', ['name', 'wavelengths', 'transmission'])
+
+# NUV
+_wls = np.arange(1000., 3000., 1.)
+nuv_transm = np.zeros_like(_wls)
+nuv_transm[(_wls>=2100.)*(_wls<=2500.0)] = 1.0
+NUV_filt = sedpyFilter(98, _wls, nuv_transm)
+
+# NIR
+_wls = np.arange(20000., 25000., 1.)
+nir_transm = np.zeros_like(_wls)
+nir_transm[(_wls>=21000.)*(_wls<=23000.0)] = 1.0
+NIR_filt = sedpyFilter(99, _wls, nir_transm)
 
 def some_hash_function(x):
     return int(jnp.sum(x))

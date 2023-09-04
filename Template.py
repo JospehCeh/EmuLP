@@ -13,6 +13,9 @@ from EmuLP import Extinction
 from EmuLP import Filter
 from copy import deepcopy
 import munch
+from collections import namedtuple
+
+BaseTemplate = namedtuple('BaseTemplate', ['name', 'flux'])
 
 class Template(munch.Munch):
     """SED Templates to be used for photo-z estimation"""
@@ -130,7 +133,7 @@ def make_base_template(ident, specfile, wl_grid):
 def nojit_no_ext_make_template(base_temp_lums, filts, z, cosmo, wl_grid):
     lumins = base_temp_lums
     zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
-    d_modulus = Cosmology.calc_distMod(cosmo, z)
+    d_modulus = Cosmology.distMod(cosmo, z)
     print(f"Dist. modulus = {d_modulus}")
     mags = jnp.array([Filter.noJit_ab_mag(filt.wavelengths, filt.transmission, zshift_wls, lumins) + d_modulus\
                       for filt in filts])
@@ -141,7 +144,7 @@ def nojit_make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
     lumins = base_temp_lums
     ext_lumins = lumins*extinc_arr
     zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
-    d_modulus = Cosmology.calc_distMod(cosmo, z)
+    d_modulus = Cosmology.distMod(cosmo, z)
     mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
                       for filt in filts])
     #f_ab = jnp.power(10., -0.4*(mags+48.6))
@@ -151,7 +154,7 @@ def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, gala
     lumins = base_temp_lums
     ext_lumins = lumins*extinc_arr
     zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid,  wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
-    d_modulus = Cosmology.calc_distMod(cosmo, z)
+    d_modulus = Cosmology.distMod(cosmo, z)
     mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
                       for filt in filts])
     f_ab = jnp.power(10., -0.4*(mags+48.6))
@@ -164,7 +167,7 @@ def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, gala
     scaled_f_ab = jnp.power(10., -0.4*(scaled_mags+48.6))
     return scaled_mags
 
-@partial(jit, static_argnums=(0,4))
+@partial(jit, static_argnums=4)
 #@partial(vmap, in_axes=(None, None, 0, 0, None, None))
 def make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
     lumins = base_temp_lums
@@ -177,23 +180,39 @@ def make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
     f_ab = jnp.power(10., -0.4*(mags+48.6))
     return f_ab
 
-@partial(jit, static_argnums=4)
-#@partial(vmap, in_axes=(None, None, 0, 0, None, 0, 0, None))
-def make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, galax_fab, galax_fab_err, wl_grid):
-    lumins = base_temp_lums
-    ext_lumins = lumins*extinc_arr
-    zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid,  wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
-    #d_modulus = Cosmology.calc_distMod(cosmo, z)
-    d_modulus = Cosmology.distMod(cosmo, z)
-    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
+@jit
+def make_dusty_template(base_temp_lums, filts, extinc_arr, wl_grid):
+    ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
+    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid, ext_lumins)\
                       for filt in filts])
     f_ab = jnp.power(10., -0.4*(mags+48.6))
-    
+    return f_ab
+
+@jit
+def calc_dusty_transm(base_temp_lums, extinc_arr):
+    return base_temp_lums*extinc_arr
+
+@jit
+def calc_fab(filts, wvls, lums, d_mod=0.):
+    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wvls, lums) + d_mod\
+                      for filt in filts])
+    f_ab = jnp.power(10., -0.4*(mags+48.6))
+    return f_ab
+
+@jit
+def calc_nuvk(baseTemp_flux, extLaw_transm, wlgrid):
+    dusty_trans = calc_dusty_transm(baseTemp_flux, extLaw_transm)
+    mab_NUV, mab_NIR = -2.5*jnp.log10(calc_fab((Filter.NUV_filt, Filter.NIR_filt), wlgrid, dusty_trans, d_mod=0.))-48.6
+    nuvk = mab_NUV-mab_NIR
+    return nuvk
+
+@jit
+def make_scaled_template(base_temp_lums, filts, extinc_arr, galax_fab, galax_fab_err, zshift_wls, d_modulus):
+    ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
+    f_ab = calc_fab(filts, zshift_wls, ext_lumins, d_modulus)
     scale = calc_scale_arrs(f_ab, galax_fab, galax_fab_err)
     scaled_lumins = ext_lumins*scale
-    scaled_mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, scaled_lumins) + d_modulus\
-                             for filt in filts])
-    scaled_f_ab = jnp.power(10., -0.4*(scaled_mags+48.6))
+    scaled_f_ab = calc_fab(filts, zshift_wls, scaled_lumins, d_modulus)
     return scaled_f_ab
 
 '''

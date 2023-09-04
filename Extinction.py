@@ -7,6 +7,9 @@ from jax import vmap
 import os
 import munch
 from functools import partial
+from collections import namedtuple
+
+DustLaw = namedtuple('DustLaw', ['name', 'EBV', 'transmission'])
 
 class Extinction(munch.Munch):
     """Class for generating extinction law functions"""

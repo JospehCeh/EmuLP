@@ -4,10 +4,13 @@ from functools import partial
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, vmap, debug
-from EmuLP import Filter, Template
+from EmuLP import Filter, Template, Cosmology
 from copy import deepcopy
 import pandas as pd
 import munch
+from collections import namedtuple
+
+Observation = namedtuple('Observation', ['num', 'AB_fluxes', 'AB_f_errors', 'z_spec'])
 
 class Galaxy(munch.Munch):
     """
@@ -179,6 +182,18 @@ def est_chi2(gal_fab, gal_fab_err, zp, temp_file, extinc_arr, filters, cosmo, wl
     return chi2
 '''
 
+@jit
+def z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid, id_i_band=4):
+    i_mag = -2.5*jnp.log10(gal_fab[id_i_band])-48.6
+    nuvk = Template.calc_nuvk(base_temp_lums, extinc_arr, wl_grid)
+    alpt0, zot, kt, pcal, ktf_m, ft_m = Cosmology.prior_alpt0(nuvk),\
+                                        Cosmology.prior_zot(nuvk),\
+                                        Cosmology.prior_kt(nuvk),\
+                                        Cosmology.prior_pcal(nuvk),\
+                                        Cosmology.prior_ktf(nuvk),\
+                                        Cosmology.prior_ft(nuvk)
+    val_prior = Cosmology.nz_prior_core(zp, i_mag, alpt0, zot, kt, pcal, ktf_m, ft_m)
+    return val_prior
 
 def noV_est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid):
     temp_fab = Template.noJit_make_scaled_template(base_temp_lums, filters, extinc_arr, zp, cosmo, gal_fab, gal_fab_err, wl_grid)
@@ -191,9 +206,12 @@ def noV_est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, 
 @partial(vmap, in_axes=(None, None, None, None, 0, None, None, None))
 @partial(vmap, in_axes=(None, None, 0, None, None, None, None, None))
 def est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid):
-    temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, zp, cosmo, gal_fab, gal_fab_err, wl_grid)
+    dist_mod = Cosmology.distMod(cosmo, zp)
+    prior_zp = z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid)
+    zshift_wls = (1.+zp)*wl_grid
+    temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, zshift_wls, dist_mod)
     _terms = chi_term(gal_fab, temp_fab, gal_fab_err)
-    chi2 = jnp.sum(_terms)/len(_terms)
+    chi2 = jnp.sum(_terms)/len(_terms) - 2*jnp.log(prior_zp)
     return chi2
 
 @partial(jit, static_argnums=(1,2,3,4))
