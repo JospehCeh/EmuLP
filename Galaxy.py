@@ -4,6 +4,7 @@ from functools import partial
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, vmap, debug
+import jax_cosmo as jc
 from EmuLP import Filter, Template, Cosmology
 from copy import deepcopy
 import pandas as pd
@@ -201,18 +202,53 @@ def noV_est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, 
     chi2 = jnp.sum(_terms)/len(_terms)
     return chi2
 
-@partial(jit, static_argnums=6)
+#@partial(jit, static_argnums=6)
+@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None))
+@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None))
+@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None))
+def est_chi2_prior(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid):
+    #dist_mod = Cosmology.distMod(cosmo, zp)
+    #prior_zp = z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid)
+    #zshift_wls = (1.+zp)*wl_grid
+    #temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zp)*wl_grid, Cosmology.distMod(cosmo, zp))
+    _terms = chi_term(gal_fab, Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zp)*wl_grid, Cosmology.distMod(cosmo, zp)), gal_fab_err)
+    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid))
+
+#@partial(jit, static_argnums=6)
 @partial(vmap, in_axes=(None, None, None, 0, None, None, None, None))
 @partial(vmap, in_axes=(None, None, None, None, 0, None, None, None))
 @partial(vmap, in_axes=(None, None, 0, None, None, None, None, None))
 def est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid):
-    dist_mod = Cosmology.distMod(cosmo, zp)
-    prior_zp = z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid)
-    zshift_wls = (1.+zp)*wl_grid
-    temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, zshift_wls, dist_mod)
-    _terms = chi_term(gal_fab, temp_fab, gal_fab_err)
-    chi2 = jnp.sum(_terms)/len(_terms) - 2*jnp.log(prior_zp)
-    return chi2
+    #dist_mod = Cosmology.distMod(cosmo, zp)
+    #zshift_wls = (1.+zp)*wl_grid
+    #temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zp)*wl_grid, Cosmology.distMod(cosmo, zp))
+    _terms = chi_term(gal_fab, Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zp)*wl_grid, Cosmology.distMod(cosmo, zp)), gal_fab_err)
+    return jnp.sum(_terms)/len(_terms)
+
+#@partial(jit, static_argnums=6)
+@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None))
+@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None))
+@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None))
+def est_chi2_prior_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_arr, filters, j_cosmo, wl_grid):
+    #dist_mod = 5.*jnp.log10(jnp.power((1.+zphot), 2)*jc.background.angular_diameter_distance(j_cosmo, jc.utils.z2a(zphot))/j_cosmo.h * 1.0e6) - 5.0 #Cosmology.calc_distMod(j_cosmo, zphot)
+    #prior_zp = z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid)
+    #zshift_wls = (1.+zphot)*wl_grid
+    #temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zphot)*wl_grid, Cosmology.calc_distMod(j_cosmo, zphot))
+    _terms = chi_term(gal_fab, Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zphot)*wl_grid, Cosmology.calc_distMod(j_cosmo, zphot)), gal_fab_err)
+    #chi2 = jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid))
+    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid))
+
+#@partial(jit, static_argnums=6)
+@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None))
+@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None))
+@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None))
+def est_chi2_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_arr, filters, j_cosmo, wl_grid):
+    #dist_mod = 5.*jnp.log10(jnp.power((1.+zphot), 2)*jc.background.angular_diameter_distance(j_cosmo, jc.utils.z2a(zphot))/j_cosmo.h * 1.0e6) - 5.0 #Cosmology.calc_distMod(j_cosmo, zphot)
+    #zshift_wls = (1.+zphot)*wl_grid
+    #temp_fab = Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, zshift_wls = (1.+zphot)*wl_grid, Cosmology.calc_distMod(cosmo, zphot))
+    _terms = chi_term(gal_fab, Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err, (1.+zphot)*wl_grid, Cosmology.calc_distMod(j_cosmo, zphot)), gal_fab_err)
+    #chi2 = jnp.sum(_terms)/len(_terms)
+    return jnp.sum(_terms)/len(_terms)
 
 @partial(jit, static_argnums=(1,2,3,4))
 @partial(vmap, in_axes=(0, None, None, None, None))

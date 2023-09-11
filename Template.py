@@ -170,23 +170,20 @@ def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, gala
 @partial(jit, static_argnums=4)
 #@partial(vmap, in_axes=(None, None, 0, 0, None, None))
 def make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
-    lumins = base_temp_lums
-    ext_lumins = lumins*extinc_arr
-    zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
+    #ext_lumins = base_temp_lums*extinc_arr
+    #zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
     #d_modulus = Cosmology.calc_distMod(cosmo, z)
-    d_modulus = Cosmology.distMod(cosmo, z)
-    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
+    #d_modulus = Cosmology.distMod(cosmo, z)
+    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid*(1.+z), base_temp_lums*extinc_arr) + Cosmology.distMod(cosmo, z)\
                       for filt in filts])
-    f_ab = jnp.power(10., -0.4*(mags+48.6))
-    return f_ab
+    return jnp.power(10., -0.4*(mags+48.6))
 
 @jit
 def make_dusty_template(base_temp_lums, filts, extinc_arr, wl_grid):
-    ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
-    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid, ext_lumins)\
+    #ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
+    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid, calc_dusty_transm(base_temp_lums, extinc_arr))\
                       for filt in filts])
-    f_ab = jnp.power(10., -0.4*(mags+48.6))
-    return f_ab
+    return jnp.power(10., -0.4*(mags+48.6))
 
 @jit
 def calc_dusty_transm(base_temp_lums, extinc_arr):
@@ -196,24 +193,28 @@ def calc_dusty_transm(base_temp_lums, extinc_arr):
 def calc_fab(filts, wvls, lums, d_mod=0.):
     mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wvls, lums) + d_mod\
                       for filt in filts])
-    f_ab = jnp.power(10., -0.4*(mags+48.6))
-    return f_ab
+    return jnp.power(10., -0.4*(mags+48.6))
 
 @jit
 def calc_nuvk(baseTemp_flux, extLaw_transm, wlgrid):
-    dusty_trans = calc_dusty_transm(baseTemp_flux, extLaw_transm)
-    mab_NUV, mab_NIR = -2.5*jnp.log10(calc_fab((Filter.NUV_filt, Filter.NIR_filt), wlgrid, dusty_trans, d_mod=0.))-48.6
-    nuvk = mab_NUV-mab_NIR
-    return nuvk
+    #dusty_trans = calc_dusty_transm(baseTemp_flux, extLaw_transm)
+    mab_NUV, mab_NIR = -2.5*jnp.log10(calc_fab((Filter.NUV_filt, Filter.NIR_filt), wlgrid, calc_dusty_transm(baseTemp_flux, extLaw_transm), d_mod=0.))-48.6
+    return mab_NUV-mab_NIR
 
 @jit
 def make_scaled_template(base_temp_lums, filts, extinc_arr, galax_fab, galax_fab_err, zshift_wls, d_modulus):
-    ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
-    f_ab = calc_fab(filts, zshift_wls, ext_lumins, d_modulus)
-    scale = calc_scale_arrs(f_ab, galax_fab, galax_fab_err)
-    scaled_lumins = ext_lumins*scale
-    scaled_f_ab = calc_fab(filts, zshift_wls, scaled_lumins, d_modulus)
-    return scaled_f_ab
+    #ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
+    #f_ab = calc_fab(filts, zshift_wls, calc_dusty_transm(base_temp_lums, extinc_arr), d_modulus)
+    #scale = calc_scale_arrs(calc_fab(filts, zshift_wls, calc_dusty_transm(base_temp_lums, extinc_arr), d_modulus), galax_fab, galax_fab_err)
+    #scaled_lumins = ext_lumins*scale
+    return calc_fab(filts,\
+                    zshift_wls,\
+                    calc_dusty_transm(base_temp_lums, extinc_arr)*calc_scale_arrs(calc_fab(filts, zshift_wls,\
+                                                                                           calc_dusty_transm(base_temp_lums, extinc_arr),\
+                                                                                           d_modulus),\
+                                                                                  galax_fab,\
+                                                                                  galax_fab_err),\
+                    d_modulus)
 
 '''
 @partial(jit, static_argnums=(0,4))
@@ -262,12 +263,11 @@ def calc_scale_arrs(f_templ, f_gal, err_gal):
     
     arr_o = f_gal/err_gal
     arr_t = f_templ/err_gal
-    avmago = jnp.sum(arr_o*arr_t)
-    avmagt = jnp.sum(jnp.power(arr_t, 2.))
-    _scale = avmago/avmagt
+    #avmago = jnp.sum(arr_o*arr_t)
+    #avmagt = jnp.sum(jnp.power(arr_t, 2.))
+    return jnp.sum(arr_o*arr_t)/jnp.sum(jnp.power(arr_t, 2.))
     #else:
     #    _scale = 1.
-    return _scale
     
 def apply_extinc(templ, law, file, ebv):
     extinc = Extinction.Extinction(law, file)

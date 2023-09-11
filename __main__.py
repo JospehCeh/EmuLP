@@ -44,8 +44,11 @@ def main(args):
         inputs = json.load(inpfile)
     
     #cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
-    cosmo = Cosmology.Cosmo(inputs['Cosmology']['h0'], inputs['Cosmology']['om0'], inputs['Cosmology']['l0'],\
-                            inputs['Cosmology']['om0']+inputs['Cosmology']['l0'])
+    if inputs['Cosmology']['jax-cosmo']:
+        cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
+    else:
+        cosmo = Cosmology.Cosmo(inputs['Cosmology']['h0'], inputs['Cosmology']['om0'], inputs['Cosmology']['l0'],\
+                                inputs['Cosmology']['om0']+inputs['Cosmology']['l0'])
     
     z_grid = jnp.arange(inputs['Z_GRID']['z_min'],\
                         inputs['Z_GRID']['z_max']+inputs['Z_GRID']['z_step'],\
@@ -125,18 +128,33 @@ def main(args):
     df_gal = pd.DataFrame()
     dict_of_results_dict = {}
     
-    @jit
-    def estim_zp(observ):
-        chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
-                                   z_grid, baseFluxes_arr, extlaws_arr,\
-                                   filters_arr, cosmo, wl_grid)
+    @partial(jit, static_argnums=(1,2))
+    def estim_zp(observ, prior=True, jaxcosmo=False):
+        if prior :
+            if jaxcosmo:
+                chi2_arr = Galaxy.est_chi2_prior_jaxcosmo(observ.AB_fluxes, observ.AB_f_errors,\
+                                                          z_grid, baseFluxes_arr, extlaws_arr,\
+                                                          filters_arr, cosmo, wl_grid)
+            else:
+                chi2_arr = Galaxy.est_chi2_prior(observ.AB_fluxes, observ.AB_f_errors,\
+                                                 z_grid, baseFluxes_arr, extlaws_arr,\
+                                                 filters_arr, cosmo, wl_grid)
+        else:
+            if jaxcosmo:
+                chi2_arr = Galaxy.est_chi2_jaxcosmo(observ.AB_fluxes, observ.AB_f_errors,\
+                                                    z_grid, baseFluxes_arr, extlaws_arr,\
+                                                    filters_arr, cosmo, wl_grid)
+            else:
+                chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
+                                           z_grid, baseFluxes_arr, extlaws_arr,\
+                                           filters_arr, cosmo, wl_grid)
         
         z_phot_loc = jnp.nanargmin(chi2_arr)
         return chi2_arr, z_phot_loc
         
     for i,observ in enumerate(tqdm(_obs_arr)):
         #print(observ.AB_fluxes)
-        chi2_arr, z_phot_loc = estim_zp(observ)
+        chi2_arr, z_phot_loc = estim_zp(observ, inputs['prior'], inputs['Cosmology']['jax-cosmo'])
         mod_num, ext_num, zphot_num = jnp.unravel_index(z_phot_loc,\
                                                         (len(baseTemp_arr),\
                                                          len(inputs['e_BV'])*len(extlaws_dict),\

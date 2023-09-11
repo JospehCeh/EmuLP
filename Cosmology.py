@@ -143,15 +143,14 @@ def distLum(cosmo, z):
 
 @partial(jit, static_argnums=0)
 def distAng(cosmo, z):
-    return self.distMet(cosmo, z) / (1+z)
+    return distMet(cosmo, z) / (1+z)
     
 # Compute the distance modulus
 @partial(jit, static_argnums=0)
 def distMod(cosmo, z):
     #funz = 0.
     #if (z >= 1.e-10):
-    funz = 5.*jnp.log10( distLum(cosmo, z)*1.0e6 ) - 5
-    return funz
+    return (5.*jnp.log10( distLum(cosmo, z)*1.0e6 ) - 5.)
 
 @partial(jit, static_argnums=0)
 def nz_prior_params(nuvk):
@@ -190,20 +189,23 @@ def nz_prior_params(nuvk):
 
 @jit
 def nz_prior_core(z, imag, alpt0, zot, kt, pcal, ktf_m, ft_m):
-    kk = imag-20.
-    zmax = zot + kt*kk
-    pz = jnp.power(z,alpt0)*jnp.exp(-jnp.power((z/zmax),alpt0))
+    #kk = imag-20.
+    #zmax = zot + kt*(imag-20.)
+    #pz = jnp.power(z,alpt0)*jnp.exp(-jnp.power((z/(zot + kt*(imag-20.))),alpt0))
 
     # Ratio for each type
-    rappSum = jnp.sum(ft*jnp.exp(-ktf*kk))
-    rapp = ft_m*jnp.exp(-ktf_m*kk)
+    #rappSum = jnp.sum(ft*jnp.exp(-ktf*(imag-20.)))
+    #rapp = ft_m*jnp.exp(-ktf_m*(imag-20.))
 
     # Normalisation of the probability function
-    pcal=jnp.power(zmax,alpt0+1)/alpt0*pcal
+    #_pcal=jnp.power(zot + kt*(imag-20.),alpt0+1)/alpt0*pcal
 
     # Final value
-    val = pz/pcal * rapp/rappSum
-    return val
+    #val = pz/_pcal * rapp/rappSum
+    return (jnp.power(z,alpt0)*jnp.exp(-jnp.power((z/(zot + kt*(imag-20.))),alpt0))) / (jnp.power(zot + kt*(imag-20.),alpt0+1)/alpt0*pcal) * (ft_m*jnp.exp(-ktf_m*(imag-20.))) / (jnp.sum(ft*jnp.exp(-ktf*(imag-20.))))
+    #if not jnp.isfinite(val):
+    #    val = 1.
+    #return (val-1.)*jnp.isfinite(val).astype(float)+1.
 
 ## Compute cosmological time from z=infinty  to z
 ## as a function of cosmology.  Age given in year !!
@@ -241,27 +243,22 @@ def make_jcosmo(H0):
     return jc.Planck15(h=H0/100.)
 
 # JAX versions
-@partial(jit, static_argnums=0)
+#@partial(jit, static_argnums=0)
 def calc_distM(cosm, z):
-    _a = jc.utils.z2a(z)
-    d_M = cosm.h * jc.background.transverse_comoving_distance(cosm, _a)
-    return d_M
+    return jc.background.radial_comoving_distance(cosm, jc.utils.z2a(z)) / cosm.h
 
-@partial(jit, static_argnums=0)
+#@partial(jit, static_argnums=0)
 def calc_distLum(cosm, z):
-    return (1.+z) * calc_distM(cosm, z)
+    return (1.+z) * jc.background.radial_comoving_distance(cosm, jc.utils.z2a(z)) / cosm.h
 
-@partial(jit, static_argnums=0)
+#@partial(jit, static_argnums=0)
 def calc_distAng(cosm, z):
-    _a = jc.utils.z2a(z)
-    d_Ang = cosm.h * jc.background.angular_diameter_distance(cosm, _a)
-    return d_Ang
+    return jc.background.angular_diameter_distance(cosm, jc.utils.z2a(z)) / cosm.h
 
 # Compute the distance modulus
-@partial(jit, static_argnums=0)
+#@partial(jit, static_argnums=0)
 def calc_distMod(cosm, z):
-    funz = 5.*jnp.log10( calc_distLum(cosm, z)*1.0e6 ) - 5
-    return funz
+    return 5.*jnp.log10( calc_distLum(cosm, z)*1.0e6 ) - 5.
 
 # Unused functions translated from LEPHARE.
 '''
