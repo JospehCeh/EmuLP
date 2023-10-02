@@ -84,17 +84,24 @@ def main(args):
     for ident in tqdm(extlaws_dict):
         dust_arr.extend([ Extinction.DustLaw(extlaws_dict[ident]['name'],\
                                              ebv,\
-                                             Extinction.load_extinc(f'{ident}_{ebv}',\
-                                                                    extlaws_dict[ident]['path'],\
+                                             Extinction.load_extinc(extlaws_dict[ident]['path'],\
                                                                     ebv,\
                                                                     wl_grid)\
                                             )\
                             for ebv in tqdm(inputs['e_BV'])\
                            ])
     extlaws_arr = jnp.row_stack( (dustlaw.transmission for dustlaw in dust_arr) )
-    
     #print(f"DEBUG: extinctions have shape {extlaws_arr.shape}, expected (nb(ebv)*nb(laws)={len(inputs['e_BV'])*len(extlaws_dict)}, len(wl_grid)={len(wl_grid)})")
     
+    print("Loading IGM attenuations :")
+    opa_path = os.path.abspath(inputs['Opacity'])
+    _selOpa = (wl_grid < 1300.)
+    wls_opa = wl_grid[_selOpa]
+    opa_zgrid, opacity_grid = Extinction.load_opacity(opa_path, wls_opa)
+    extrap_ones = jnp.ones((len(z_grid), len(wl_grid)-len(wls_opa)))
+    print("Interpolating IGM attenuations :")
+    interpolated_opacities = Extinction.opacity_at_z(z_grid, opa_zgrid, opacity_grid)
+    interpolated_opacities = jnp.concatenate((interpolated_opacities, extrap_ones), axis=1)
     
     print('Loading observations :')
     data_path = os.path.abspath(inputs['Dataset']['path'])
@@ -134,20 +141,24 @@ def main(args):
             if jaxcosmo:
                 chi2_arr = Galaxy.est_chi2_prior_jaxcosmo(observ.AB_fluxes, observ.AB_f_errors,\
                                                           z_grid, baseFluxes_arr, extlaws_arr,\
-                                                          filters_arr, cosmo, wl_grid)
+                                                          filters_arr, cosmo, wl_grid,\
+                                                          interpolated_opacities)
             else:
                 chi2_arr = Galaxy.est_chi2_prior(observ.AB_fluxes, observ.AB_f_errors,\
                                                  z_grid, baseFluxes_arr, extlaws_arr,\
-                                                 filters_arr, cosmo, wl_grid)
+                                                 filters_arr, cosmo, wl_grid,\
+                                                 interpolated_opacities)
         else:
             if jaxcosmo:
                 chi2_arr = Galaxy.est_chi2_jaxcosmo(observ.AB_fluxes, observ.AB_f_errors,\
                                                     z_grid, baseFluxes_arr, extlaws_arr,\
-                                                    filters_arr, cosmo, wl_grid)
+                                                    filters_arr, cosmo, wl_grid,\
+                                                    interpolated_opacities)
             else:
                 chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
                                            z_grid, baseFluxes_arr, extlaws_arr,\
-                                           filters_arr, cosmo, wl_grid)
+                                           filters_arr, cosmo, wl_grid,\
+                                           interpolated_opacities)
         
         z_phot_loc = jnp.nanargmin(chi2_arr)
         return chi2_arr, z_phot_loc

@@ -140,9 +140,9 @@ def nojit_no_ext_make_template(base_temp_lums, filts, z, cosmo, wl_grid):
     #f_ab = jnp.power(10., -0.4*(mags+48.6))
     return mags
 
-def nojit_make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
+def nojit_make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid, opacities):
     lumins = base_temp_lums
-    ext_lumins = lumins*extinc_arr
+    ext_lumins = lumins*extinc_arr*opacities
     zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
     d_modulus = Cosmology.distMod(cosmo, z)
     mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
@@ -150,9 +150,9 @@ def nojit_make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
     #f_ab = jnp.power(10., -0.4*(mags+48.6))
     return mags
 
-def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, galax_fab, galax_fab_err, wl_grid):
+def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, galax_fab, galax_fab_err, wl_grid, opacities):
     lumins = base_temp_lums
-    ext_lumins = lumins*extinc_arr
+    ext_lumins = lumins*extinc_arr*opacities
     zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid,  wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
     d_modulus = Cosmology.distMod(cosmo, z)
     mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, zshift_wls, ext_lumins) + d_modulus\
@@ -169,12 +169,13 @@ def nojit_make_scaled_template(base_temp_lums, filts, extinc_arr, z, cosmo, gala
 
 @partial(jit, static_argnums=4)
 #@partial(vmap, in_axes=(None, None, 0, 0, None, None))
-def make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid):
+def make_template(base_temp_lums, filts, extinc_arr, z, cosmo, wl_grid, opacities):
     #ext_lumins = base_temp_lums*extinc_arr
     #zshift_wls = wl_grid*(1.+z) #jnp.interp(wl_grid, wavelengths, wavelengths*(1.+z), left=0., right=0., period=None)
     #d_modulus = Cosmology.calc_distMod(cosmo, z)
     #d_modulus = Cosmology.distMod(cosmo, z)
-    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid*(1.+z), base_temp_lums*extinc_arr) + Cosmology.distMod(cosmo, z)\
+    mags = jnp.array([Filter.ab_mag(filt.wavelengths, filt.transmission, wl_grid*(1.+z),\
+                                    base_temp_lums*extinc_arr*opacities) + Cosmology.distMod(cosmo, z)\
                       for filt in filts])
     return jnp.power(10., -0.4*(mags+48.6))
 
@@ -202,18 +203,15 @@ def calc_nuvk(baseTemp_flux, extLaw_transm, wlgrid):
     return mab_NUV-mab_NIR
 
 @jit
-def make_scaled_template(base_temp_lums, filts, extinc_arr, galax_fab, galax_fab_err, zshift_wls, d_modulus):
-    #ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr)
+def make_scaled_template(base_temp_lums, filts, extinc_arr, galax_fab, galax_fab_err, z, wl_grid, d_modulus, opacities):
+    ext_lumins = calc_dusty_transm(base_temp_lums, extinc_arr) * opacities
+    zshift_wls = (1.+z)*wl_grid
     #f_ab = calc_fab(filts, zshift_wls, calc_dusty_transm(base_temp_lums, extinc_arr), d_modulus)
     #scale = calc_scale_arrs(calc_fab(filts, zshift_wls, calc_dusty_transm(base_temp_lums, extinc_arr), d_modulus), galax_fab, galax_fab_err)
     #scaled_lumins = ext_lumins*scale
     return calc_fab(filts,\
                     zshift_wls,\
-                    calc_dusty_transm(base_temp_lums, extinc_arr)*calc_scale_arrs(calc_fab(filts, zshift_wls,\
-                                                                                           calc_dusty_transm(base_temp_lums, extinc_arr),\
-                                                                                           d_modulus),\
-                                                                                  galax_fab,\
-                                                                                  galax_fab_err),\
+                    ext_lumins*calc_scale_arrs(calc_fab(filts, zshift_wls, ext_lumins, d_modulus), galax_fab, galax_fab_err),\
                     d_modulus)
 
 '''
