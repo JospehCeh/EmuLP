@@ -51,12 +51,18 @@ DustLaw = namedtuple('DustLaw', ['name', 'EBV', 'transmission'])
 
 #conf_json = 'EmuLP/COSMOS2020-with-FORS2-HSC_only-jax-CC-togglePriorTrue-opa.json' # attention à la localisation du fichier !
 
+
 def json_to_inputs(conf_json):
     with open(conf_json, "r") as inpfile:
         inputs = json.load(inpfile)
     return inputs
     
 def load_data_for_analysis(conf_json):
+    
+    _path = os.path.abspath(__file__)
+    _dname = os.path.dirname(_path)
+    os.chdir(_dname)
+    
     inputs = json_to_inputs(conf_json)
 
     #cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
