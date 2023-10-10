@@ -58,6 +58,7 @@ def json_to_inputs(conf_json):
     return inputs
     
 def load_data_for_analysis(conf_json):
+    _old_dir = os.getcwd()
     
     _path = os.path.abspath(__file__)
     _dname = os.path.dirname(_path)
@@ -83,6 +84,8 @@ def load_data_for_analysis(conf_json):
 
     print("Loading filters :")
     filters_dict = inputs['Filters']
+    for _f in filters_dict:
+        filters_dict[_f]['path'] = os.path.abspath(filters_dict[_f]['path'])
     filters_arr = tuple( Filter.sedpyFilter(*Filter.load_filt(int(ident),\
                                                                filters_dict[ident]["path"],\
                                                                filters_dict[ident]["transmission"]\
@@ -100,6 +103,8 @@ def load_data_for_analysis(conf_json):
 
     print("Building templates :")
     templates_dict = inputs['Templates']
+    for _t in templates_dict:
+        templates_dict[_t]['path'] = os.path.abspath(templates_dict[_t]['path'])
     baseTemp_arr = tuple( Template.BaseTemplate(*Template.make_base_template(templates_dict[ident]["name"],\
                                                                              templates_dict[ident]["path"],\
                                                                              wl_grid
@@ -111,6 +116,8 @@ def load_data_for_analysis(conf_json):
 
     print("Generating dust attenuations laws :")
     extlaws_dict = inputs['Extinctions']
+    for _e in extlaws_dict:
+        extlaws_dict[_e]['path'] = os.path.abspath(extlaws_dict[_e]['path'])
     ebv_vals = jnp.array(inputs['e_BV'])
     dust_arr = []
     for ident in tqdm(extlaws_dict):
@@ -158,10 +165,16 @@ def load_data_for_analysis(conf_json):
             obs_arr.extend([observ])
         except AssertionError:
             pass
-        
+    
+    os.chdir(_old_dir)
     return cosmo, z_grid, fine_z_grid, wl_grid, filters_arr, named_filters, baseTemp_arr, extlaws_dict, ebv_vals, dust_arr, wls_opa, opa_zgrid, opacity_grid, obs_arr
 
 def load_data_for_run(inputs):
+    _old_dir = os.getcwd()
+    
+    _path = os.path.abspath(__file__)
+    _dname = os.path.dirname(_path)
+    os.chdir(_dname)
     #cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
     if inputs['Cosmology']['jax-cosmo']:
         cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
@@ -177,6 +190,8 @@ def load_data_for_run(inputs):
                          inputs['WL_GRID']['lambda_step'])
     
     filters_dict = inputs['Filters']
+    for _f in filters_dict:
+        filters_dict[_f]['path'] = os.path.abspath(filters_dict[_f]['path'])
     print("Loading filters :")
     filters_arr = tuple( Filter.sedpyFilter(*Filter.load_filt(int(ident),\
                                                               filters_dict[ident]["path"],\
@@ -198,6 +213,8 @@ def load_data_for_run(inputs):
     
     print("Building templates :")
     templates_dict = inputs['Templates']
+    for _t in templates_dict:
+        templates_dict[_t]['path'] = os.path.abspath(templates_dict[_t]['path'])
     baseTemp_arr = tuple( Template.BaseTemplate(*Template.make_base_template(templates_dict[ident]["name"],\
                                                                              templates_dict[ident]["path"],\
                                                                              wl_grid
@@ -208,6 +225,8 @@ def load_data_for_run(inputs):
     
     print("Computing dust extinctions :")
     extlaws_dict = inputs['Extinctions']
+    for _e in extlaws_dict:
+        extlaws_dict[_e]['path'] = os.path.abspath(extlaws_dict[_e]['path'])
     ebv_vals = jnp.array(inputs['e_BV'])
     dust_arr = []
     for ident in tqdm(extlaws_dict):
@@ -260,6 +279,7 @@ def load_data_for_run(inputs):
         except AssertionError:
             pass
         
+    os.chdir(_old_dir)
     return cosmo, z_grid, wl_grid, filters_arr, named_filts, baseTemp_arr, baseFluxes_arr, extlaws_dict, ebv_vals, dust_arr, extlaws_arr, interpolated_opacities, obs_arr
 
 
