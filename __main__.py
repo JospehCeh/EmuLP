@@ -113,7 +113,7 @@ def main(args):
             chi2_arr = chi2_arr + 2*jnp.log(norm)
             probsarr, norm = Analysis.probability_distrib(chi2_arr, len(baseTemp_arr), len(extlaws_dict), ebv_vals, z_grid)
         
-        NMOD = 5
+        NMOD = inputs['NMOD']
         evidence_ranked_mods = {}
         evidence_ranked_mods["Template SED"] = []
         evidence_ranked_mods["Dust law"] = []
@@ -126,7 +126,7 @@ def main(args):
         evidence_ranked_mods["Bias"] = []
         for f in named_filts:
             evidence_ranked_mods[f"M({f.name})"] = []
-            
+
         mods_at_z_spec = {}
         mods_at_z_spec["Template SED"] = []
         mods_at_z_spec["Dust law"] = []
@@ -162,39 +162,40 @@ def main(args):
         df_gal.loc[observ.num, "Highest evidence z_phot (mean)"] = z_mean
         df_gal.loc[observ.num, "Highest evidence sigma(z)"] = z_std
         
-        for rank, (n_temp, n_dust) in enumerate(sorted_evs[:NMOD]):
-            evidence_ranked_mods["Template SED"].append(baseTemp_arr[n_temp].name)
-            evidence_ranked_mods["Dust law"].append(dust_arr[n_dust].name)
-            evidence_ranked_mods["E(B-V)"].append(dust_arr[n_dust].EBV)
-            z_distrib = probsarr[n_temp, n_dust, :] / jnp.trapz(probsarr[n_temp, n_dust, :], x=z_grid)
-            cum_distr = jnp.cumsum(z_distrib)
-            z_mode = z_grid[jnp.nanargmax(z_distrib)]
-            evidence_ranked_mods["zp (mode)"].append(z_mode)
-            #opa_at_z = Extinction.opacity_at_z(jnp.array([z_mode]), opa_zgrid, opacity_grid)
-            opa_at_z = jnp.array([jnp.interp(z_mode, opa_zgrid, opacity_grid[:, _col]) for _col in range(opacity_grid.shape[1])])
-            opacities = jnp.concatenate((opa_at_z, jnp.ones(len(wl_grid)-len(wls_opa))), axis=None)
-            templ_fab = Template.make_scaled_template(baseTemp_arr[n_temp].flux, filters_arr,\
-                                                      dust_arr[n_dust].transmission,\
-                                                      observ.AB_fluxes, observ.AB_f_errors,\
-                                                      z_mode, wl_grid,\
-                                                      Cosmology.distMod(cosmo, z_mode),\
-                                                      opacities
-                                                     )
-            templ_mab = -2.5*jnp.log10(templ_fab)-48.6
-            z_avg = jnp.trapz(z_distrib*z_grid, x=z_grid)
-            evidence_ranked_mods["average(z)"].append(z_avg)
-            evidence_ranked_mods["sigma(z)"].append(jnp.trapz(z_distrib*jnp.power(z_grid-z_avg, 2), x=z_grid))
-            _selmed = cum_distr > 0.5
-            try :
-                evidence_ranked_mods["median(z)"].append(z_grid[_selmed][0])
-            except IndexError:
-                evidence_ranked_mods["median(z)"].append(None)
-            evidence_ranked_mods["Odd ratio"].append(evs_nosplit[sorted_evs[rank]]/evs_nosplit[sorted_evs[0]])
-            evidence_ranked_mods["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
-            for num_f, f in enumerate(named_filts):
-                evidence_ranked_mods[f"M({f.name})"].append(templ_mab[num_f])
-        
-        # Include z_spec-derived properties
+        if inputs["Evidence analysis"]:
+            # Include more evidence-derived properties
+            for rank, (n_temp, n_dust) in enumerate(sorted_evs[:NMOD]):
+                evidence_ranked_mods["Template SED"].append(baseTemp_arr[n_temp].name)
+                evidence_ranked_mods["Dust law"].append(dust_arr[n_dust].name)
+                evidence_ranked_mods["E(B-V)"].append(dust_arr[n_dust].EBV)
+                z_distrib = probsarr[n_temp, n_dust, :] / jnp.trapz(probsarr[n_temp, n_dust, :], x=z_grid)
+                cum_distr = jnp.cumsum(z_distrib)
+                z_mode = z_grid[jnp.nanargmax(z_distrib)]
+                evidence_ranked_mods["zp (mode)"].append(z_mode)
+                #opa_at_z = Extinction.opacity_at_z(jnp.array([z_mode]), opa_zgrid, opacity_grid)
+                opa_at_z = jnp.array([jnp.interp(z_mode, opa_zgrid, opacity_grid[:, _col]) for _col in range(opacity_grid.shape[1])])
+                opacities = jnp.concatenate((opa_at_z, jnp.ones(len(wl_grid)-len(wls_opa))), axis=None)
+                templ_fab = Template.make_scaled_template(baseTemp_arr[n_temp].flux, filters_arr,\
+                                                          dust_arr[n_dust].transmission,\
+                                                          observ.AB_fluxes, observ.AB_f_errors,\
+                                                          z_mode, wl_grid,\
+                                                          Cosmology.distMod(cosmo, z_mode),\
+                                                          opacities
+                                                         )
+                templ_mab = -2.5*jnp.log10(templ_fab)-48.6
+                z_avg = jnp.trapz(z_distrib*z_grid, x=z_grid)
+                evidence_ranked_mods["average(z)"].append(z_avg)
+                evidence_ranked_mods["sigma(z)"].append(jnp.trapz(z_distrib*jnp.power(z_grid-z_avg, 2), x=z_grid))
+                _selmed = cum_distr > 0.5
+                try :
+                    evidence_ranked_mods["median(z)"].append(z_grid[_selmed][0])
+                except IndexError:
+                    evidence_ranked_mods["median(z)"].append(None)
+                evidence_ranked_mods["Odd ratio"].append(evs_nosplit[sorted_evs[rank]]/evs_nosplit[sorted_evs[0]])
+                evidence_ranked_mods["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
+                for num_f, f in enumerate(named_filts):
+                    evidence_ranked_mods[f"M({f.name})"].append(templ_mab[num_f])
+                    
         if jnp.isfinite(observ.z_spec):
             p_zfix_nosplit, _n = Analysis.probs_at_fixed_z(probsarr, observ.z_spec, len(baseTemp_arr), len(extlaws_dict),\
                                                            ebv_vals, z_grid, renormalize=True, prenormalize=False)
@@ -208,55 +209,59 @@ def main(args):
             df_gal.loc[observ.num, "E(B-V) at z_spec"] = dust_arr[n_dust].EBV
             df_gal.loc[observ.num, "Odd ratio"] = float(evs_nosplit[n_temp, n_dust] / evs_nosplit[mod_num, ext_num])
             
-            #opa_at_z = Extinction.opacity_at_z(jnp.array([observ.z_spec]), opa_zgrid, opacity_grid)
-            opa_at_z = jnp.array([jnp.interp(observ.z_spec, opa_zgrid, opacity_grid[:, _col]) for _col in range(opacity_grid.shape[1])])
-            opacities = jnp.concatenate((opa_at_z, jnp.ones(len(wl_grid)-len(wls_opa))), axis=None)
-            
-            for rank, (n_temp, n_dust) in enumerate(sorted_pzfix[:NMOD]):
-                mods_at_z_spec["Template SED"].append(baseTemp_arr[n_temp].name)
-                mods_at_z_spec["Dust law"].append(dust_arr[n_dust].name)
-                mods_at_z_spec["E(B-V)"].append(dust_arr[n_dust].EBV)
-                z_distrib = probsarr[n_temp, n_dust, :] / jnp.trapz(probsarr[n_temp, n_dust, :], x=z_grid)
-                cum_distr = jnp.cumsum(z_distrib)
-                z_mode = z_grid[jnp.nanargmax(z_distrib)]
-                mods_at_z_spec["zp (mode)"].append(z_mode)
-                templ_fab = Template.make_scaled_template(baseTemp_arr[n_temp].flux, filters_arr,\
-                                                          dust_arr[n_dust].transmission,\
-                                                          observ.AB_fluxes, observ.AB_f_errors,\
-                                                          observ.z_spec, wl_grid,\
-                                                          Cosmology.distMod(cosmo, observ.z_spec),\
-                                                          opacities
-                                                         )
-                templ_mab = -2.5*jnp.log10(templ_fab)-48.6
-                z_avg = jnp.trapz(z_distrib*z_grid, x=z_grid)
-                mods_at_z_spec["average(z)"].append(z_avg)
-                mods_at_z_spec["sigma(z)"].append(jnp.trapz(z_distrib*jnp.power(z_grid-z_avg, 2), x=z_grid))
-                _selmed = cum_distr > 0.5
-                try :
-                    mods_at_z_spec["median(z)"].append(z_grid[_selmed][0])
-                except IndexError:
-                    mods_at_z_spec["median(z)"].append(None)
-                mods_at_z_spec["Odd ratio"].append(p_zfix_nosplit[sorted_pzfix[rank]]/p_zfix_nosplit[sorted_pzfix[0]])
-                mods_at_z_spec["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
-                for num_f, f in enumerate(named_filts):
-                    mods_at_z_spec[f"M({f.name})"].append(templ_mab[num_f])
+            if inputs['z_spec analysis']:
+                # Include more z_spec-derived properties
+                #opa_at_z = Extinction.opacity_at_z(jnp.array([observ.z_spec]), opa_zgrid, opacity_grid)
+                opa_at_z = jnp.array([jnp.interp(observ.z_spec, opa_zgrid, opacity_grid[:, _col]) for _col in range(opacity_grid.shape[1])])
+                opacities = jnp.concatenate((opa_at_z, jnp.ones(len(wl_grid)-len(wls_opa))), axis=None)
+
+                for rank, (n_temp, n_dust) in enumerate(sorted_pzfix[:NMOD]):
+                    mods_at_z_spec["Template SED"].append(baseTemp_arr[n_temp].name)
+                    mods_at_z_spec["Dust law"].append(dust_arr[n_dust].name)
+                    mods_at_z_spec["E(B-V)"].append(dust_arr[n_dust].EBV)
+                    z_distrib = probsarr[n_temp, n_dust, :] / jnp.trapz(probsarr[n_temp, n_dust, :], x=z_grid)
+                    cum_distr = jnp.cumsum(z_distrib)
+                    z_mode = z_grid[jnp.nanargmax(z_distrib)]
+                    mods_at_z_spec["zp (mode)"].append(z_mode)
+                    templ_fab = Template.make_scaled_template(baseTemp_arr[n_temp].flux, filters_arr,\
+                                                              dust_arr[n_dust].transmission,\
+                                                              observ.AB_fluxes, observ.AB_f_errors,\
+                                                              observ.z_spec, wl_grid,\
+                                                              Cosmology.distMod(cosmo, observ.z_spec),\
+                                                              opacities
+                                                             )
+                    templ_mab = -2.5*jnp.log10(templ_fab)-48.6
+                    z_avg = jnp.trapz(z_distrib*z_grid, x=z_grid)
+                    mods_at_z_spec["average(z)"].append(z_avg)
+                    mods_at_z_spec["sigma(z)"].append(jnp.trapz(z_distrib*jnp.power(z_grid-z_avg, 2), x=z_grid))
+                    _selmed = cum_distr > 0.5
+                    try :
+                        mods_at_z_spec["median(z)"].append(z_grid[_selmed][0])
+                    except IndexError:
+                        mods_at_z_spec["median(z)"].append(None)
+                    mods_at_z_spec["Odd ratio"].append(p_zfix_nosplit[sorted_pzfix[rank]]/p_zfix_nosplit[sorted_pzfix[0]])
+                    mods_at_z_spec["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
+                    for num_f, f in enumerate(named_filts):
+                        mods_at_z_spec[f"M({f.name})"].append(templ_mab[num_f])
         else:
             df_gal.loc[observ.num, "Best SED at z_spec"] = None
             df_gal.loc[observ.num, "Best dust law at z_spec"] = None
             df_gal.loc[observ.num, "E(B-V) at z_spec"] = None
             df_gal.loc[observ.num, "Odd ratio"] = None
-            for rep in range(NMOD):
-                mods_at_z_spec["Template SED"].append(None)
-                mods_at_z_spec["Dust law"].append(None)
-                mods_at_z_spec["E(B-V)"].append(None)
-                mods_at_z_spec["zp (mode)"].append(None)
-                mods_at_z_spec["average(z)"].append(None)
-                mods_at_z_spec["sigma(z)"].append(None)
-                mods_at_z_spec["median(z)"].append(None)
-                mods_at_z_spec["Odd ratio"].append(None)
-                mods_at_z_spec["Bias"].append(None)
-                for num_f, f in enumerate(named_filts):
-                    mods_at_z_spec[f"M({f.name})"].append(None)
+            
+            if inputs['z_spec analysis']:
+                for rep in range(NMOD):
+                    mods_at_z_spec["Template SED"].append(None)
+                    mods_at_z_spec["Dust law"].append(None)
+                    mods_at_z_spec["E(B-V)"].append(None)
+                    mods_at_z_spec["zp (mode)"].append(None)
+                    mods_at_z_spec["average(z)"].append(None)
+                    mods_at_z_spec["sigma(z)"].append(None)
+                    mods_at_z_spec["median(z)"].append(None)
+                    mods_at_z_spec["Odd ratio"].append(None)
+                    mods_at_z_spec["Bias"].append(None)
+                    for num_f, f in enumerate(named_filts):
+                        mods_at_z_spec[f"M({f.name})"].append(None)
         
         #chi2_arr = Galaxy.est_chi2(observ.AB_fluxes, observ.AB_f_errors,\
         #                           z_grid, baseFluxes_arr, extlaws_arr,\
