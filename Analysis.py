@@ -285,30 +285,33 @@ def load_data_for_run(inputs):
 
 def results_in_dataframe(conf_json, observations, filters, filt_nums=(1,2,3,4)):
     inputs = json_to_inputs(conf_json)
-    df_res = pd.read_pickle(f"{inputs['run name']}_results.pkl")
-    for obs in tqdm(observations):
-        for i,filt in enumerate(filters):
-            if obs.num in df_res.index:
-                df_res.loc[obs.num, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
-                df_res.loc[obs.num, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
+    df_res = pd.read_pickle(f"{inputs['run name']}_results_summary.pkl")
+    for j,obs in enumerate(tqdm(observations)):
+        if j in df_res.index:
+            assert(obs.num == df_res.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID")
+            for i,filt in enumerate(filters):
+                    df_res.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
+                    df_res.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
     df_res['bias'] = df_res['Photometric redshift']-df_res['True redshift']
-    df_res['std'] = df_res['bias']/(1.+df_res['True redshift'])
-    df_res['Outlier'] = np.abs(df_res['std'])>0.15
+    #df_res['std'] = df_res['bias']/(1.+df_res['True redshift'])
+    df_res['Outlier'] = np.abs(df_res['bias']/(1.+df_res['True redshift']))>0.15
     df_res['U-B'] = df_res[f"MagAB({filters[filt_nums[0]].name})"]-df_res[f"MagAB({filters[filt_nums[1]].name})"]
     df_res['R-I'] = df_res[f"MagAB({filters[filt_nums[2]].name})"]-df_res[f"MagAB({filters[filt_nums[3]].name})"]
-    df_res['redness'] = df_res['U-B']/df_res['R-I']
+    #df_res['redness'] = df_res['U-B']/df_res['R-I']
     outl_rate = 100.0*len(df_res[df_res['Outlier']])/len(df_res)
+    NMAD = 1.4821 * np.median(np.abs(df_res['bias']/(1.+df_res['True redshift'])))
     
-    print(f'Outlier rate = {outl_rate:.4f}%')
-    return df_res, outl_rate
+    print(f'Outlier rate = {outl_rate:.4f}% ; NMAD = {NMAD:.5f}')
+    return df_res, outl_rate, NMAD
 
 def enrich_dataframe(res_df, observations, filters, filt_nums=(1,2,3,4)):
     results_df = res_df.copy()
-    for obs in tqdm(observations):
-        for i,filt in enumerate(filters):
-            if obs.num in results_df.index:
-                results_df.loc[obs.num, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
-                results_df.loc[obs.num, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
+    for j,obs in enumerate(tqdm(observations)):
+        if j in results_df.index:
+            assert(obs.num == results_df.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID")
+            for i,filt in enumerate(filters):
+                results_df.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
+                results_df.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
     results_df['bias'] = results_df['Photometric redshift']-results_df['True redshift']
     #results_df['std'] = results_df['bias']/(1.+results_df['True redshift'])
     results_df['Outlier'] = np.abs(results_df['bias']/(1.+results_df['True redshift']))>0.15
@@ -316,9 +319,10 @@ def enrich_dataframe(res_df, observations, filters, filt_nums=(1,2,3,4)):
     results_df['R-I'] = results_df[f"MagAB({filters[filt_nums[2]].name})"]-results_df[f"MagAB({filters[filt_nums[3]].name})"]
     #results_df['redness'] = results_df['U-B']/df_res['R-I']
     outl_rate = 100.0*len(results_df[results_df['Outlier']])/len(results_df)
+    NMAD = 1.4821 * np.median(np.abs(results_df['bias']/(1.+results_df['True redshift'])))
     
-    print(f'Outlier rate = {outl_rate:.4f}%')
-    return results_df.copy(), outl_rate
+    print(f'Outlier rate = {outl_rate:.4f}% ; NMAD = {NMAD:.5f}')
+    return results_df.copy(), outl_rate, NMAD
 
 @partial(jit, static_argnums=(1,2))
 def probability_distrib(chi2_array, n_baseTemp, n_extLaws, EBVs, zgrid):

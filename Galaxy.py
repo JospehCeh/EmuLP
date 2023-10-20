@@ -11,7 +11,7 @@ import pandas as pd
 import munch
 from collections import namedtuple
 
-Observation = namedtuple('Observation', ['num', 'AB_fluxes', 'AB_f_errors', 'z_spec'])
+Observation = namedtuple('Observation', ['num', 'AB_fluxes', 'AB_f_errors', 'valid_filters', 'z_spec'])
 
 class Galaxy(munch.Munch):
     """
@@ -142,14 +142,16 @@ def load_galaxy(photometry, ismag):
     if ismag:
         f_ab = jnp.power(10, -0.4*(_phot+48.6)) # conversion to flux.
         f_ab_err = _phot*_phot_errs/1.086 # As in LEPHARE - to be checked.
+        filters_to_use = jnp.isfinite(f_ab)
         #magnitudes = _phot
         #mag_errors = _phot_errs
     else :
         f_ab = _phot
         f_ab_err = _phot_errs
+        filters_to_use = (f_ab > 0.)
         #magnitudes = -2.5*jnp.log10(_phot)-48.6 # conversion to AB-magnitudes.
         #mag_errors = 1.086*_phot_errs/_phot # As in LEPHARE - to be checked.
-    return f_ab, f_ab_err
+    return f_ab, f_ab_err, filters_to_use
 
 @jit
 @vmap
@@ -205,10 +207,10 @@ def noV_est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, 
     return chi2
 
 #@partial(jit, static_argnums=6)
-@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None))
-@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None, None))
-@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None, 0))
-def est_chi2_prior(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid, opacities):
+@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None, None))
+@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None, None, None))
+@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None, 0, None))
+def est_chi2_prior(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosmo, wl_grid, opacities, prior_band):
     #dist_mod = Cosmology.distMod(cosmo, zp)
     #prior_zp = z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid)
     #zshift_wls = (1.+zp)*wl_grid
@@ -217,7 +219,7 @@ def est_chi2_prior(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters
                       Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err,\
                                                     zp, wl_grid, Cosmology.distMod(cosmo, zp), opacities),\
                       gal_fab_err)
-    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid))
+    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zp, base_temp_lums, extinc_arr, wl_grid, prior_band))
 
 #@partial(jit, static_argnums=6)
 @partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None))
@@ -231,13 +233,14 @@ def est_chi2(gal_fab, gal_fab_err, zp, base_temp_lums, extinc_arr, filters, cosm
                       Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err,\
                                                     zp, wl_grid, Cosmology.distMod(cosmo, zp), opacities),\
                       gal_fab_err)
+    if len(filters)<7 : debug.print("chi in bands = {t}", t=_terms)
     return jnp.sum(_terms)/len(_terms)
 
 #@partial(jit, static_argnums=6)
-@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None))
-@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None, None))
-@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None, 0))
-def est_chi2_prior_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_arr, filters, j_cosmo, wl_grid, opacities):
+@partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None, None))
+@partial(vmap, in_axes=(None, None, None, None, 0, None, None, None, None, None))
+@partial(vmap, in_axes=(None, None, 0, None, None, None, None, None, 0, None))
+def est_chi2_prior_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_arr, filters, j_cosmo, wl_grid, opacities, prior_band):
     #dist_mod = 5.*jnp.log10(jnp.power((1.+zphot), 2)*jc.background.angular_diameter_distance(j_cosmo, jc.utils.z2a(zphot))/j_cosmo.h * 1.0e6) - 5.0 #Cosmology.calc_distMod(j_cosmo, zphot)
     #prior_zp = z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid)
     #zshift_wls = (1.+zphot)*wl_grid
@@ -246,8 +249,9 @@ def est_chi2_prior_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_
                       Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err,\
                                                     zphot, wl_grid, Cosmology.calc_distMod(j_cosmo, zp), opacities),\
                       gal_fab_err)
+    if len(filters)<7 : debug.print("chi in bands = {t}", t=_terms)
     #chi2 = jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid))
-    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid))
+    return jnp.sum(_terms)/len(_terms) - 2*jnp.log(z_prior_val(gal_fab, zphot, base_temp_lums, extinc_arr, wl_grid, prior_band))
 
 #@partial(jit, static_argnums=6)
 @partial(vmap, in_axes=(None, None, None, 0, None, None, None, None, None))
@@ -261,6 +265,7 @@ def est_chi2_jaxcosmo(gal_fab, gal_fab_err, zphot, base_temp_lums, extinc_arr, f
                       Template.make_scaled_template(base_temp_lums, filters, extinc_arr, gal_fab, gal_fab_err,\
                                                     zphot, wl_grid, Cosmology.calc_distMod(j_cosmo, zp), opacities),\
                       gal_fab_err)
+    if len(filters)<7 : debug.print("chi in bands = {t}", t=_terms)
     #chi2 = jnp.sum(_terms)/len(_terms)
     return jnp.sum(_terms)/len(_terms)
 
