@@ -32,7 +32,7 @@ import pandas as pd
 import seaborn as sns
 import jax_cosmo as jc
 import jax.numpy as jnp
-from jax import vmap, jit
+from jax import vmap, jit, debug
 import json, pickle
 import os,sys,copy
 from tqdm import tqdm
@@ -42,6 +42,7 @@ from scipy.interpolate import interp1d
 from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline as j_spline
 
 """
+Reminder :
 Cosmo = namedtuple('Cosmo', ['h0', 'om0', 'l0', 'omt'])
 sedpyFilter = namedtuple('sedpyFilter', ['name', 'wavelengths', 'transmission'])
 BaseTemplate = namedtuple('BaseTemplate', ['name', 'flux'])
@@ -112,8 +113,6 @@ def load_data_for_analysis(conf_json):
                                                )
                          for ident in tqdm(templates_dict) )
 
-    #baseFluxes_arr = jnp.row_stack((bt.flux for bt in baseTemp_arr))
-
     print("Generating dust attenuations laws :")
     extlaws_dict = inputs['Extinctions']
     for _e in extlaws_dict:
@@ -129,8 +128,6 @@ def load_data_for_analysis(conf_json):
                                             )\
                          for ebv in tqdm(ebv_vals)\
                         ])
-
-    #extlaws_arr = jnp.row_stack( (dustlaw.transmission for dustlaw in dust_arr) )
 
     print("Loading IGM attenuations :")
     opa_path = os.path.abspath(inputs['Opacity'])
@@ -175,7 +172,6 @@ def load_data_for_run(inputs):
     _path = os.path.abspath(__file__)
     _dname = os.path.dirname(_path)
     os.chdir(_dname)
-    #cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
     if inputs['Cosmology']['jax-cosmo']:
         cosmo = Cosmology.make_jcosmo(inputs['Cosmology']['h0'])
     else:
@@ -202,7 +198,6 @@ def load_data_for_run(inputs):
     N_FILT = len(filters_arr)
     #print(f"DEBUG: filters = {filters_arr}")
     
-
     named_filts = tuple( Filter.sedpyFilter(*Filter.load_filt(filters_dict[ident]["name"],\
                                                                filters_dict[ident]["path"],\
                                                                filters_dict[ident]["transmission"]\
@@ -248,8 +243,17 @@ def load_data_for_run(inputs):
     opa_zgrid, opacity_grid = Extinction.load_opacity(opa_path, wls_opa)
     extrap_ones = jnp.ones((len(z_grid), len(wl_grid)-len(wls_opa)))
     print("Interpolating IGM attenuations :")
-    interpolated_opacities = Extinction.opacity_at_z(z_grid, opa_zgrid, opacity_grid)
-    interpolated_opacities = jnp.concatenate((interpolated_opacities, extrap_ones), axis=1)
+    igm_filename = f"IGM_z{inputs['Z_GRID']['z_min']}_z{inputs['Z_GRID']['z_max']}_z{inputs['Z_GRID']['z_step']}_wl{inputs['WL_GRID']['lambda_min']}_WL{inputs['WL_GRID']['lambda_max']}_WL{inputs['WL_GRID']['lambda_step']}.npy"
+    if not os.path.isfile(igm_filename):
+        print("Interpolated IGM not found. Interpolating IGM attenuations - this step can take a few minutes.")
+        interpolated_opacities = Extinction.opacity_at_z(z_grid, opa_zgrid, opacity_grid)
+        interpolated_opacities = jnp.concatenate((interpolated_opacities, extrap_ones), axis=1)
+        with open(igm_filename, 'wb') as _igmFile:
+            jnp.save(_igmFile, interpolated_opacities, allow_pickle=False)
+            
+    print("Loading interpolated IGM attenuations :")
+    with open(igm_filename, 'rb') as _igmFile:
+        interpolated_opacities = jnp.load(_igmFile, allow_pickle=False)
     
     print('Loading observations :')
     data_path = os.path.abspath(inputs['Dataset']['path'])
@@ -288,7 +292,7 @@ def results_in_dataframe(conf_json, observations, filters, filt_nums=(1,2,3,4)):
     df_res = pd.read_pickle(f"{inputs['run name']}_results_summary.pkl")
     for j,obs in enumerate(tqdm(observations)):
         if j in df_res.index:
-            assert(obs.num == df_res.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID")
+            assert obs.num == df_res.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID"
             for i,filt in enumerate(filters):
                     df_res.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
                     df_res.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
@@ -308,7 +312,7 @@ def enrich_dataframe(res_df, observations, filters, filt_nums=(1,2,3,4)):
     results_df = res_df.copy()
     for j,obs in enumerate(tqdm(observations)):
         if j in results_df.index:
-            assert(obs.num == results_df.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID")
+            assert obs.num == results_df.loc[j,'Id'], "Incorrect match Obs. number <-> Gal. ID"
             for i,filt in enumerate(filters):
                 results_df.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
                 results_df.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
@@ -348,6 +352,60 @@ def probability_distrib(chi2_array, n_baseTemp, n_extLaws, EBVs, zgrid):
     _int_laws = jnp.trapz(jnp.array(sub_ints_ebv_z), x=jnp.arange(1, 1+len(sub_ints_ebv_z)), axis=0)
     
     return probs_array / _int_laws, _int_laws
+
+@partial(jit, static_argnums=(1))
+def probability_distrib_noDust(chi2_array, n_baseTemp, zgrid):
+    # Compute the probability values
+    probs_array = jnp.exp(-0.5*chi2_array)
+    
+    # Integrate successively:
+    ## Over z
+    _int_z = jnp.trapz(probs_array, x=zgrid, axis=2)
+    #debug.print("Int over z = {n}", n=_int_z)
+    
+    ## Over models
+    _int_mods = jnp.trapz(_int_z, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+    #debug.print("Norm = {n}", n=_int_mods)
+    
+    return probs_array / _int_mods[0], _int_mods[0]
+
+@partial(jit, static_argnums=(1,2))
+def probability_distrib_oneEBV(chi2_array, n_baseTemp, n_extLaws, zgrid):
+    # Compute the probability values
+    probs_array = jnp.exp(-0.5*chi2_array)
+    
+    # Integrate successively:
+    ## Over models
+    _int_mods = jnp.trapz(probs_array, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+
+    _sub_ints = jnp.split(_int_mods, n_extLaws, axis=0)
+    sub_ints_ebv_z = []
+    for sub_arr in _sub_ints:
+        ## Intergrate over z
+        _int_z = jnp.trapz(sub_arr, x=zgrid, axis=0)
+        sub_ints_ebv_z.append(_int_z)
+
+    ## Over laws
+    _int_laws = jnp.trapz(jnp.array(sub_ints_ebv_z), x=jnp.arange(1, 1+len(sub_ints_ebv_z)), axis=0)
+    
+    return probs_array / _int_laws, _int_laws
+
+@partial(jit, static_argnums=(1))
+def probability_distrib_oneLaw(chi2_array, n_baseTemp, EBVs, zgrid):
+    # Compute the probability values
+    probs_array = jnp.exp(-0.5*chi2_array)
+    
+    # Integrate successively:
+    ## Over models
+    _int_mods = jnp.trapz(probs_array, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+    
+    ## Integration over E(B-V)
+    _int_ebv = jnp.trapz(_int_mods, x=EBVs, axis=0)
+
+    ## Intergrate over z
+    _int_z = jnp.trapz(_int_ebv, x=zgrid, axis=0)
+    
+    return probs_array / _int_z, _int_z
 
 @partial(jit, static_argnums=(1))
 def prob_mod(probs_array, n_extLaws, EBVs, zgrid):
@@ -471,6 +529,90 @@ def probs_at_fixed_z(probs_array, fixed_z, n_baseTemp, n_extLaws, EBVs, zgrid, r
     # return values array the same size as the number of based templates
     return interpolated_array / norm, norm
 
+@partial(jit, static_argnums=(2,5,6))
+def probs_at_fixed_z_oneLaw(probs_array, fixed_z, n_baseTemp, EBVs, zgrid, renormalize=True, prenormalize=False):
+    # probs_array(n temp, n laws * n dust, len(z_grid)) -> probs_array(n temp, n laws * n dust)
+    interpolated_array = jnp.zeros((probs_array.shape[0], probs_array.shape[1]))
+    
+    # Interpolate pdf at fixed_z
+    for i in range(probs_array.shape[0]):
+        for j in range(probs_array.shape[1]):
+            _probs = probs_array[i,j,:]
+            if prenormalize:
+                _prenorm = jnp.trapz(_probs, x=zgrid, axis=0)
+                _probs = _probs / _prenorm
+            #f_interp = j_spline(z_grid, _probs, k=2)
+            #_interp_pdf = f_interp(fixed_z)
+            _interp_pdf = jnp.interp(fixed_z, zgrid, _probs)
+            interpolated_array = interpolated_array.at[i,j].set(_interp_pdf)
+    
+    norm = 1.0
+    if renormalize:
+        # Integrate successively:
+        ## Over models
+        _int_mods = jnp.trapz(interpolated_array, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+
+        ## Integration over E(B-V)
+        _int_ebv = jnp.trapz(_int_mods, x=EBVs, axis=0)
+    
+    # return values array the same size as the number of based templates
+    return interpolated_array / _int_ebv, _int_ebv
+
+@partial(jit, static_argnums=(2,3,5,6))
+def probs_at_fixed_z_oneEBV(probs_array, fixed_z, n_baseTemp, n_extLaws, zgrid, renormalize=True, prenormalize=False):
+    # probs_array(n temp, n laws * n dust, len(z_grid)) -> probs_array(n temp, n laws * n dust)
+    interpolated_array = jnp.zeros((probs_array.shape[0], probs_array.shape[1]))
+    
+    # Interpolate pdf at fixed_z
+    for i in range(probs_array.shape[0]):
+        for j in range(probs_array.shape[1]):
+            _probs = probs_array[i,j,:]
+            if prenormalize:
+                _prenorm = jnp.trapz(_probs, x=zgrid, axis=0)
+                _probs = _probs / _prenorm
+            #f_interp = j_spline(z_grid, _probs, k=2)
+            #_interp_pdf = f_interp(fixed_z)
+            _interp_pdf = jnp.interp(fixed_z, zgrid, _probs)
+            interpolated_array = interpolated_array.at[i,j].set(_interp_pdf)
+    
+    norm = 1.0
+    if renormalize:
+        # Integrate successively:
+        ## Over models
+        _int_mods = jnp.trapz(interpolated_array, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+
+        ## Over laws
+        norm = jnp.trapz(jnp.array(_int_mods), x=jnp.arange(1, 1+_int_mods.shape[0]), axis=0)
+    
+    # return values array the same size as the number of based templates
+    return interpolated_array / norm, norm
+
+@partial(jit, static_argnums=(2,4,5))
+def probs_at_fixed_z_noDust(probs_array, fixed_z, n_baseTemp, zgrid, renormalize=True, prenormalize=False):
+    # probs_array(n temp, n laws * n dust, len(z_grid)) -> probs_array(n temp, n laws * n dust)
+    interpolated_array = jnp.zeros((probs_array.shape[0], probs_array.shape[1]))
+    
+    # Interpolate pdf at fixed_z
+    for i in range(probs_array.shape[0]):
+        for j in range(probs_array.shape[1]):
+            _probs = probs_array[i,j,:]
+            if prenormalize:
+                _prenorm = jnp.trapz(_probs, x=zgrid, axis=0)
+                _probs = _probs / _prenorm
+            #f_interp = j_spline(z_grid, _probs, k=2)
+            #_interp_pdf = f_interp(fixed_z)
+            _interp_pdf = jnp.interp(fixed_z, zgrid, _probs)
+            interpolated_array = interpolated_array.at[i,j].set(_interp_pdf)
+    
+    norm = 1.0
+    if renormalize:
+        # Integrate successively:
+        ## Over models
+        _int_mods = jnp.trapz(interpolated_array, x=jnp.arange(1, 1+n_baseTemp), axis=0)
+    
+    # return values array the same size as the number of based templates
+    return interpolated_array / _int_mods, _int_mods
+
 @partial(jit, static_argnums=(2,3))
 def p_template_at_fixed_z(probs_array, fixed_z, n_baseTemp, n_extLaws, EBVs, zgrid):
     # probs_array(n temp, n laws * n dust, len(z_grid)) -> probs_array(n temp, n laws * n dust)
@@ -491,6 +633,7 @@ def p_template_at_fixed_z(probs_array, fixed_z, n_baseTemp, n_extLaws, EBVs, zgr
     # return values array the same size as the number of based templates
     return int_laws
 
+# TBD - Working on arrays to try and use vmap for this too
 """
 def evidences_in_df(df_res, results_dict, z_grid, baseTemp_arr, dust_arr):
     seds_zs = []
@@ -578,5 +721,3 @@ def investigate_at_z_spec(df_res, results_dict, baseTemp_arr, dust_arr):
     df_res["E(B-V) at z_spec"] = ebvs_zs
     df_res["Odd ratio"] = odds_zs
 """
-
-# TBD - Working on arrays to try and use vmap for this too

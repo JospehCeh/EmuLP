@@ -6,11 +6,8 @@ from jax import vmap, jit
 from jax.debug import print as jprint
 from scipy.interpolate import interp1d
 import os
-import pandas as pd
 import matplotlib.pyplot as plt
 #import sedpy
-import munch
-from typing import NamedTuple, Any
 import pathlib
 from collections import namedtuple
 
@@ -34,63 +31,6 @@ _wls = np.arange(20000., 25000., 1.)
 nir_transm = np.zeros_like(_wls)
 nir_transm[(_wls>=21000.)*(_wls<=23000.0)] = 1.0
 NIR_filt = sedpyFilter(99, _wls, nir_transm)
-
-def some_hash_function(x):
-    return int(jnp.sum(x))
-
-class HashableArrayWrapper:
-    def __init__(self, val):
-        self.val = val
-    def __hash__(self):
-        return some_hash_function(self.val)
-    def __eq__(self, other):
-        return (isinstance(other, HashableArrayWrapper) and
-                jnp.all(jnp.equal(self.val, other.val)))
-
-class Filter(munch.Munch):
-    """Class for filters implementation."""
-    def __init__(self, ident, filterfile, trans_type, filtdict=None):
-        if filtdict is None:
-            super().__init__()
-            self.id = ident
-            #self.path = os.path.abspath(filterfile)
-            _wls, _trans = np.loadtxt(os.path.abspath(filterfile), unpack=True)
-            self.trans_type = trans_type
-            wls, transm = sort(_wls, _trans)
-            self.mean_wl, new_trans = transform(wls, transm, self.trans_type)
-            self.wavelengths, self.transmit,\
-                                self.min_wl, self.max_wl,\
-                                self.minWL_peak, self.maxWL_peak, self.peak_wl = clip_filter(wls, new_trans)
-        else:
-            super().__init__(filtdict)
-        
-        f_transmit = lambda x : jnp.interp(x, self.wavelengths, self.transmit, left=0., right=0., period=None)
-        
-        save_dir = os.path.abspath(os.path.join('.', 'EmuLP', 'data', 'filters'))
-        import pathlib
-        pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
-        np.savetxt(os.path.join(save_dir, f'{self.id}.par'),\
-                   np.column_stack((self.wavelengths,\
-                                    f_transmit(self.wavelengths)\
-                                    )\
-                                   )\
-                  )
-        self.sedpy_filt = sedpy.observate.Filter(f'{self.id}', directory=save_dir)
-        
-    def __str__(self):
-        return f"{self.id} filter" #, from file : {self.path}."
-        
-    def __repr__(self):
-        return f"<Filter object : name={self.id}" # ; path={self.path}>"
-    
-    def __eq__(self, other):
-        return (self.id == other.id) and (self.trans_type == other.trans_type) and (self.mean_wl == other.mean_wl) and (self.minWL_peak == other.minWL_peak) and (self.maxWL_peak == other.maxWL_peak) and (self.peak_wl == other.peak_wl)
-    
-    def __ne__(self, other):
-        return not self.__eq__(other)
-    
-    def __hash__(self):
-        return hash((self.id, self.trans_type, self.mean_wl, self.minWL_peak, self.maxWL_peak, self.peak_wl))
         
 def sort(wl, trans):
     _inds = jnp.argsort(wl)
@@ -133,25 +73,6 @@ def load_filt(ident, filterfile, trans_type):
     #np.savetxt(os.path.join(save_dir, f'{ident}.par'), np.column_stack( (wls[_sel], new_trans[_sel]) ) )
     #return ident, sedpy.observate.Filter(f'{ident}', directory=save_dir)
 
-def to_df(filters_arr, wls=np.arange(1000., 10000., 10.), save=False, name=None):
-    df_filt = pd.DataFrame(index=wls)
-    for filt in filters_arr:
-        f_transmit = lambda x : jnp.interp(x, filt.wavelengths, filt.transmit, left=0., right=0., period=None) 
-        df_filt[filt.id] = f_transmit(wls)
-    if save:
-        try:
-            assert name is not None, "Please specify a name for filters dataframe file."
-            df_filt.to_pickle(name+'.pkl')
-        except AssertionError:
-            print("No name provided. Filters dataframe not written on disc.")
-            pass
-    return df_filt
-
-def return_updated_filter(filt, **kwargs):
-    as_dict = filt.toDict()
-    as_dict.update(kwargs)
-    new_filt = Filter(None, None, None, filtdict=as_dict)
-    return new_filt
 
 #################################################
 # THE FOLLOWING IS ADAPTED FROM sedpy.observate #
