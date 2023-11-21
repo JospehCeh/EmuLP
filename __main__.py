@@ -255,7 +255,8 @@ def main(args):
                     except IndexError:
                         evidence_ranked_mods["median(z)"].append(None)
                     evidence_ranked_mods["Odd ratio"].append(evs_nosplit[n_temp, n_dust]/evs_nosplit[mod_num, ext_num])
-                    evidence_ranked_mods["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
+                    evidence_ranked_mods["Bias"].append(z_mode - observ.z_spec)
+                    #evidence_ranked_mods["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
                     for num_f, f in enumerate(named_filts):
                         evidence_ranked_mods[f"M({f.name})"].append(templ_mab[num_f])
 
@@ -319,7 +320,8 @@ def main(args):
                         except IndexError:
                             mods_at_z_spec["median(z)"].append(None)
                         mods_at_z_spec["Odd ratio"].append(evs_nosplit[n_temp, n_dust]/evs_nosplit[mod_num, ext_num])
-                        mods_at_z_spec["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
+                        mods_at_z_spec["Bias"].append(z_mode - observ.z_spec)
+                        #mods_at_z_spec["Bias"].append(jnp.abs(z_mode - observ.z_spec)/(1+observ.z_spec))
                         for num_f, f in enumerate(named_filts):
                             mods_at_z_spec[f"M({f.name})"].append(templ_mab[num_f])
             else:

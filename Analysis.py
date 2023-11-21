@@ -296,14 +296,14 @@ def results_in_dataframe(conf_json, observations, filters, filt_nums=(1,2,3,4)):
             for i,filt in enumerate(filters):
                     df_res.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
                     df_res.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
-    df_res['bias'] = df_res['Photometric redshift']-df_res['True redshift']
+    df_res['Bias'] = df_res['Photometric redshift']-df_res['True redshift']
     #df_res['std'] = df_res['bias']/(1.+df_res['True redshift'])
-    df_res['Outlier'] = np.abs(df_res['bias']/(1.+df_res['True redshift']))>0.15
+    df_res['Outlier'] = np.abs(df_res['Bias']/(1.+df_res['True redshift']))>0.15
     df_res['U-B'] = df_res[f"MagAB({filters[filt_nums[0]].name})"]-df_res[f"MagAB({filters[filt_nums[1]].name})"]
     df_res['R-I'] = df_res[f"MagAB({filters[filt_nums[2]].name})"]-df_res[f"MagAB({filters[filt_nums[3]].name})"]
     #df_res['redness'] = df_res['U-B']/df_res['R-I']
     outl_rate = 100.0*len(df_res[df_res['Outlier']])/len(df_res)
-    NMAD = 1.4821 * np.median(np.abs(df_res['bias']/(1.+df_res['True redshift'])))
+    NMAD = 1.4821 * np.median(np.abs(df_res['Bias']/(1.+df_res['True redshift'])))
     
     print(f'Outlier rate = {outl_rate:.4f}% ; NMAD = {NMAD:.5f}')
     return df_res, outl_rate, NMAD
@@ -316,14 +316,14 @@ def enrich_dataframe(res_df, observations, filters, filt_nums=(1,2,3,4)):
             for i,filt in enumerate(filters):
                 results_df.loc[j, f"MagAB({filt.name})"] = -2.5*jnp.log10(obs.AB_fluxes[i])-48.6
                 results_df.loc[j, f"err_MagAB({filt.name})"] = 1.086*obs.AB_f_errors[i]/obs.AB_fluxes[i]
-    results_df['bias'] = results_df['Photometric redshift']-results_df['True redshift']
+    results_df['Bias'] = results_df['Photometric redshift']-results_df['True redshift']
     #results_df['std'] = results_df['bias']/(1.+results_df['True redshift'])
-    results_df['Outlier'] = np.abs(results_df['bias']/(1.+results_df['True redshift']))>0.15
+    results_df['Outlier'] = np.abs(results_df['Bias']/(1.+results_df['True redshift']))>0.15
     results_df['U-B'] = results_df[f"MagAB({filters[filt_nums[0]].name})"]-results_df[f"MagAB({filters[filt_nums[1]].name})"]
     results_df['R-I'] = results_df[f"MagAB({filters[filt_nums[2]].name})"]-results_df[f"MagAB({filters[filt_nums[3]].name})"]
     #results_df['redness'] = results_df['U-B']/df_res['R-I']
     outl_rate = 100.0*len(results_df[results_df['Outlier']])/len(results_df)
-    NMAD = 1.4821 * np.median(np.abs(results_df['bias']/(1.+results_df['True redshift'])))
+    NMAD = 1.4821 * np.median(np.abs(results_df['Bias']/(1.+results_df['True redshift'])))
     
     print(f'Outlier rate = {outl_rate:.4f}% ; NMAD = {NMAD:.5f}')
     return results_df.copy(), outl_rate, NMAD
