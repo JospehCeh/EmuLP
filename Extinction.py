@@ -14,7 +14,7 @@ def load_extinc(extincfile, ebv, wl_grid):
     wls, co = np.loadtxt(os.path.abspath(extincfile), unpack=True)
     wavelengths, coeff = jnp.array(wls), jnp.array(co)
     _trans = calc_transmit(ebv, coeff)
-    transmits = jnp.interp(wl_grid, wavelengths, _trans, left=0., right=0., period=None)
+    transmits = jnp.interp(wl_grid, wavelengths, _trans, left=_trans[0], right=1., period=None)
     return transmits
 
 def load_opacity(opa_list_file, lambdas):
