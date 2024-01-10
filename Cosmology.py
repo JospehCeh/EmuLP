@@ -3,9 +3,10 @@
 from functools import partial
 import jax_cosmo as jc
 import jax.numpy as jnp
+import pandas as pd
 from jax import vmap, jit
-import munch
 from collections import namedtuple
+import os
 
 # pi
 # pi = 3.14159265359 #on utilise np.pi
@@ -28,6 +29,17 @@ f_ga = 1
 Cosmo = namedtuple('Cosmo', ['h0', 'om0', 'l0', 'omt'])
 PriorParams = namedtuple('PriorParams', ['mod', 'zot', 'kt', 'alpt0', 'pcal', 'ktf', 'ft', 'nuv_range'])
 
+_old_dir = os.getcwd()
+_path = os.path.abspath(__file__)
+_dname = os.path.dirname(_path)
+os.chdir(_dname)
+ebv_prior_file = 'NoType_NoLaw_ebv_prior_dataframe_fromFORS2.pkl' #'NoType_ebv_prior_dataframe_fromFORS2.pkl'  #'BothExt_ebv_prior_dataframe_fromFORS2.pkl'
+ebv_prior_df = pd.read_pickle(ebv_prior_file)
+os.chdir(_old_dir)
+
+cols_to_stack = tuple(ebv_prior_df[col].values for col in ebv_prior_df.columns)
+ebv_prior_arr = jnp.column_stack(cols_to_stack)
+
 # P(T|m0)
 ktf = jnp.array([0.47165, 0.30663, 0.12715, -0.34437])
 ft = jnp.array([0.43199, 0.07995, 0.31162, 0.21220])
@@ -39,6 +51,14 @@ prior_params_set = (PriorParams(0, 0.45181, 0.13677, 3.33078, 0.89744, ktf[0], f
                    )
 
 prior_pars_E_S0, prior_pars_Sbc, prior_pars_Scd, prior_pars_Irr = prior_params_set
+
+@jit
+def prior_mod(nuvk):
+    val = prior_pars_Irr.mod +\
+            (prior_pars_Scd.mod - prior_pars_Irr.mod)*jnp.heaviside(nuvk-prior_pars_Scd.nuv_range[0], 0)+\
+            (prior_pars_Sbc.mod - prior_pars_Scd.mod)*jnp.heaviside(nuvk-prior_pars_Sbc.nuv_range[0], 0)+\
+            (prior_pars_E_S0.mod - prior_pars_Sbc.mod)*jnp.heaviside(nuvk-prior_pars_E_S0.nuv_range[0], 0)
+    return val.astype(int)
 
 @jit
 def prior_zot(nuvk):
@@ -87,25 +107,6 @@ def prior_ft(nuvk):
             (prior_pars_Sbc.ft - prior_pars_Scd.ft)*jnp.heaviside(nuvk-prior_pars_Sbc.nuv_range[0], 0)+\
             (prior_pars_E_S0.ft - prior_pars_Sbc.ft)*jnp.heaviside(nuvk-prior_pars_E_S0.nuv_range[0], 0)
     return val
-
-class Cosmology(munch.Munch):
-    """Implementation of the functions of the cosmo class from LePhare in python"""
-    def __init__(self, h0=70., om0=0.3, l0=0.7, cosmodict=None):
-        if cosmodict is None:
-            super().__init__()
-            self.h0 = h0
-            self.om0 = om0
-            self.l0 = l0
-            self.omt = self.om0+self.l0
-            self.name = f"LCDM_h0={self.h0}-Om0={self.om0}-l0={self.l0}"
-        else:
-            super().__init__(cosmodict)
-        
-    def __str__(self):
-        return f"Cosmology object with h0={self.h0}"
-        
-    def __repr__(self):
-        return f"<Cosmology object : h0={self.h0}>"
 
 # Compute the metric distance dmet in Mpc : dlum = dmet*(1+z), dang = dmet/(1+z) = dlum/(1+z)^2
 @partial(jit, static_argnums=0)
@@ -206,6 +207,38 @@ def nz_prior_core(z, imag, alpt0, zot, kt, pcal, ktf_m, ft_m):
     #if not jnp.isfinite(val):
     #    val = 1.
     #return (val-1.)*jnp.isfinite(val).astype(float)+1.
+    
+@jit
+def ebv_prior_2laws(ebv, mod, law):
+    kde_val = jnp.interp(ebv, ebv_prior_arr[:, 0], ebv_prior_arr[:, 1+2*mod+law])
+    return kde_val
+
+@jit
+def ebv_prior_1law(ebv, mod):
+    kde_val = jnp.interp(ebv, ebv_prior_arr[:, 0], ebv_prior_arr[:, 1+mod])
+    return kde_val
+
+@jit
+def ebv_prior_notype(ebv, law):
+    kde_val = jnp.interp(ebv, ebv_prior_arr[:, 0], ebv_prior_arr[:, 1+law])
+    return kde_val
+
+@jit
+def ebv_prior_notype_nolaw(ebv):
+    kde_val = jnp.interp(ebv, ebv_prior_arr[:, 0], ebv_prior_arr[:, 1])
+    return kde_val
+
+@jit
+def ebv_prior(ebv, mod, law):
+    if ebv_prior_file == 'BothExt_ebv_prior_dataframe_fromFORS2.pkl':
+        kde_val = ebv_prior_2laws(ebv, mod, law)
+    elif ebv_prior_file == 'NoType_NoLaw_ebv_prior_dataframe_fromFORS2.pkl':
+        kde_val = ebv_prior_notype_nolaw(ebv)
+    elif ebv_prior_file == 'NoType_ebv_prior_dataframe_fromFORS2.pkl':
+        kde_val = ebv_prior_notype(ebv, law)
+    else:
+        kde_val = ebv_prior_1law(ebv, mod)
+    return kde_val
 
 ## Compute cosmological time from z=infinty  to z
 ## as a function of cosmology.  Age given in year !!
@@ -259,63 +292,3 @@ def calc_distAng(cosm, z):
 #@partial(jit, static_argnums=0)
 def calc_distMod(cosm, z):
     return 5.*jnp.log10( calc_distLum(cosm, z)*1.0e6 ) - 5.
-
-# Unused functions translated from LEPHARE.
-'''
-    # Two possible grid in redshift : linear or in (1+z)
-    # Possible now to define a minimum redshift to be considered
-    def zgrid(self, gridType, dz, zmin, zmax):
-        assert zmax < zmin, "You are probably using the old parametrisation of Z_STEP since Z MIN > Z MAX in Z_STEP."
-        z = jnp.array([])
-        # first redshift at 0
-        z = jnp.append(z, 0.)
-
-        # Start at zmin
-        if(zmin > 0.):
-            z = jnp.append(z, zmin)
-        count = 1
-        zinter = zmin
-        # Define a vector with the redshift grid according to the given type
-        # grid in dz*(1+z)
-        if gridType == 1 :
-            while (zinter<zmax):
-                # Step in dz*(1+z)
-                zinter = zinter+(1.+zinter)*dz
-                # keep only in the redshift range zmin-zmax defined in Z_STEP
-                if (zinter>zmin and zinter<zmax):
-                    z = jnp.append(z, zinter)
-        # Linear grid in redshift
-        else:
-            while (zinter<zmax):
-                # Step in dz
-                zinter = zmin + count * dz
-                # keep only in the redshift range zmin-zmax defined in Z_STEP
-                if(zinter>zmin and zinter<zmax):
-                    z = jnp.append(z, zinter)
-                count+=1
-        z = jnp.append(z, zmax)
-        return z
-
-    def indexz(self, red, gridz):
-        #gridz is assumed to be sorted
-        #case 1 : red <= gridz[0] : return index 0
-        idz = 0
-        if(red <= gridz[0]):
-            idz = 0
-        #case 2 : red >= gridz[size-1] : return index size-1
-        elif(red >= gridz[-1]):
-            idz = gridz.size-1
-        else :
-            up = jnp.where(gridz >= red)[0]
-            #case 3 : red = gridz[k] : return k
-            if (gridz[up] == red):
-                idz = up
-            # case 4 : gridz[0] < red < gridz[size-1] : find closest match in gridz and return its index 
-            else:
-                low = up-1
-                if( abs(up - red) <= abs(red - low) ):
-                    idz = up
-                else:
-                    idz = low
-        return int(idz)
-'''
